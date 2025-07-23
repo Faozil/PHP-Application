@@ -1,0 +1,102 @@
+name: Deploy PHP Application
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  AWS_REGION: eu-west-1
+  STACK_NAME: php-app
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: testpassword
+          MYSQL_DATABASE: testdb
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Build and run application
+      run: |
+        docker build -f Dockerfile -t php-app .
+        docker run -d --name php-app -p 8080:80 \
+          -e DB_HOST=localhost \
+          -e DB_USERNAME=root \
+          -e DB_PASSWORD=testpassword \
+          -e DB_NAME=testdb \
+          -e DB_PORT=3306 \
+          --network host \
+          php-app
+    
+    - name: Wait for application
+      run: |
+        timeout 60 bash -c 'until curl -s http://localhost:8080; do sleep 2; done'
+    
+    - name: Install test dependencies
+      run: |
+        pip install -r tests/requirements.txt
+    
+    - name: Run tests
+      env:
+        APP_URL: http://localhost:8080
+      run: |
+        python -m pytest tests/ -v
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Deploy CloudFormation stack
+      run: |
+        aws cloudformation deploy \
+          --template-file infrastructure/cloudformation.yaml \
+          --stack-name ${{ env.STACK_NAME }} \
+          --parameter-overrides \
+            KeyPairName=${{ secrets.KEY_PAIR_NAME }} \
+            DBUsername=admin \
+            DBPassword=${{ secrets.DB_PASSWORD }} \
+          --capabilities CAPABILITY_IAM \
+          --region ${{ env.AWS_REGION }}
+    
+    - name: Get application URL
+      id: get-url
+      run: |
+        LOAD_BALANCER_DNS=$(aws cloudformation describe-stacks \
+          --stack-name ${{ env.STACK_NAME }} \
+          --region ${{ env.AWS_REGION }} \
+          --query 'Stacks[0].Outputs[?OutputKey==`LoadBalancerDNS`].OutputValue' \
+          --output text)
+        echo "app-url=http://$LOAD_BALANCER_DNS" >> $GITHUB_OUTPUT
+    
+    - name: Run integration tests
+      env:
+        APP_URL: ${{ steps.get-url.outputs.app-url }}
+      run: |
+        # Wait for deployment to complete
+        sleep 300
+        pip install -r tests/requirements.txt
+        python -m pytest tests/ -v

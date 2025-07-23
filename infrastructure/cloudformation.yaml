@@ -263,9 +263,8 @@ Resources:
             # Clone repository and run application
             yum install -y git
             cd /home/ec2-user
-            # Replace with your actual repository URL
             git clone https://github.com/Faozil/PHP-Application.git app
-            cd PHP-Application/app
+            cd app
             
             # Create environment file
             cat << EOF > .env
