@@ -1,0 +1,14 @@
+[
+  {
+    "ParameterKey": "KeyPairName",
+    "ParameterValue": "your-key-pair-name"
+  },
+  {
+    "ParameterKey": "DBUsername",
+    "ParameterValue": "admin"
+  },
+  {
+    "ParameterKey": "DBPassword",
+    "ParameterValue": "your-secure-password"
+  }
+]
