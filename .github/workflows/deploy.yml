@@ -1,11 +1,11 @@
 name: Deploy PHP Application
 
-on:
-  push:
-    branches: [ main ]
+#on:
+#  push:
+#    branches: [ main ]
 
 env:
-  AWS_REGION: eu-west-1
+  AWS_REGION: eu-west-2
   STACK_NAME: php-app
 
 jobs:
