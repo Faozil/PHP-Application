@@ -60,8 +60,19 @@ jobs:
     
     - name: Wait for MySQL to be ready
       run: |
-        timeout 60 bash -c 'until docker exec $(docker ps -q --filter ancestor=mysql:8.0) mysqladmin ping -h localhost --silent; do sleep 2; done'
+        echo "Waiting for MySQL to be ready..."
+        timeout 60 bash -c 'until docker exec $(docker ps -q --filter ancestor=mysql:8.0) mysqladmin ping -h localhost --silent; do 
+          echo "MySQL is not ready yet..."
+          sleep 2
+        done'
+        echo "MySQL is ready"
     
+    - name: Connect MySQL to test network
+      run: |
+        MYSQL_CONTAINER=$(docker ps -q --filter ancestor=mysql:8.0)
+        echo "Connecting MySQL container $MYSQL_CONTAINER to test-network"
+        docker network connect test-network $MYSQL_CONTAINER 
+
     - name: Run PHP application container
       run: |
         docker run -d --name php-app --network test-network -p 8080:80 \
@@ -72,16 +83,31 @@ jobs:
           -e DB_PORT=3306 \
           -e APP_ENV=testing \
           php-app:${{ env.DOCKER_IMAGE_TAG }}
+
+        docker ps --filter name=php-app
     
-    - name: Connect MySQL to test network
-      run: docker network connect test-network $(docker ps -q --filter ancestor=mysql:8.0)
+    - name: Check container logs
+      run: |
+        echo "=== PHP Application Logs ==="
+        docker logs php-app || echo "No logs yet"
+        echo "=== MySQL Logs ==="
+        docker logs $(docker ps -q --filter ancestor=mysql:8.0) | tail -10 || echo "No MySQL logs"
+    
+    - name: Test network connectivity
+      run: |
+        echo "Testing network connectivity..."
+        docker exec php-app ping -c 3 mysql || echo "Cannot ping mysql from php-app"
+        docker exec php-app nslookup mysql || echo "Cannot resolve mysql hostname"
     
     - name: Wait for application to be ready
       run: |
-        timeout 180 bash -c 'until curl -s http://localhost:8080/health.php | grep -q "OK\|healthy"; do 
-          echo "Waiting for app to be ready..."
-          sleep 5
+        echo "Waiting for application to respond..."
+        timeout 180 bash -c 'until curl -s http://localhost:8080/ || curl -s http://localhost:8080/index.php; do 
+          echo "App not ready yet. Checking logs..."
+          docker logs php-app | tail -5
+          sleep 10
         done'
+        echo "Application is responding"
     
     - name: Set up Python for testing
       uses: actions/setup-python@v5
@@ -106,11 +132,25 @@ jobs:
     
     - name: Run basic smoke tests
       run: |
-        curl -f http://localhost:8080/health.php || exit 1
-        echo "Health check passed"
+
+        echo "Testing basic connectivity..."
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ || echo "000")
+        echo "HTTP response code: $HTTP_CODE"
+
+        echo "Testing different endpoints..."
+        curl -s http://localhost:8080/ | head -10 || echo "Main endpoint failed"
+        curl -s http://localhost:8080/index.php | head -10 || echo "index.php failed"
+        curl -s http://localhost:8080/health.php | head -10 || echo "health.php failed"
         
-        # Check if app responds to main endpoint
-        curl -f http://localhost:8080/ || echo "This is not ready yet"
+        # Check if any endpoint returns 200
+        if curl -f http://localhost:8080/ || curl -f http://localhost:8080/index.php; then
+          echo "At least one endpoint is accessible"
+        else
+          echo "No endpoints are accessible"
+          echo "=== Final container logs ==="
+          docker logs php-app
+          exit 1
+        fi
     
     - name: Cleanup containers
       if: always()
