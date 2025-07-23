@@ -46,6 +46,7 @@ jobs:
         file: ./Dockerfile
         push: false
         tags: php-app:${{ env.DOCKER_IMAGE_TAG }}
+        load: true
         cache-from: type=local,src=/tmp/.buildx-cache
         cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
     

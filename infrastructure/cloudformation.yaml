@@ -3,7 +3,7 @@ Description: 'PHP Application Infrastructure'
 
 Parameters:
   KeyPairName:
-    Type: AWS::EC2::KeyPair::php-app
+    Type: AWS::EC2::KeyPair::KeyName
     Description: Name of an existing EC2 KeyPair
   
   DBUsername:
