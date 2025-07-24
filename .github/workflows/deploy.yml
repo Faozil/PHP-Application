@@ -370,12 +370,52 @@ jobs:
         echo "load-balancer-dns=${LOAD_BALANCER_DNS}" >> $GITHUB_OUTPUT
         echo "database-endpoint=${DATABASE_ENDPOINT}" >> $GITHUB_OUTPUT
         echo "Application URL: ${APP_URL}"
+    
+    - name: Get ECR Repository URI
+      id: get-ecr-direct
+      run: |
+        echo "Getting ECR repository URI directly..."
+
+        ECR_URI_FROM_STACK=$(aws cloudformation describe-stacks \
+          --stack-name ${{ env.STACK_NAME }} \
+          --region ${{ env.AWS_REGION }} \
+          --query 'Stacks[0].Outputs[?OutputKey==`ECRRepositoryUri`].OutputValue' \
+          --output text 2>/dev/null || echo "")
+        
+        echo "ECR URI from stack: '$ECR_URI_FROM_STACK'"
+
+         ECR_URI_DIRECT=$(aws ecr describe-repositories \
+          --repository-names php-app \
+          --region ${{ env.AWS_REGION }} \
+          --query 'repositories[0].repositoryUri' \
+          --output text 2>/dev/null || echo "")
+        
+        echo "ECR URI direct query: '$ECR_URI_DIRECT'"
+
+        if [ -n "$ECR_URI_FROM_STACK" ] && [ "$ECR_URI_FROM_STACK" != "null" ]; then
+          ECR_URI="$ECR_URI_FROM_STACK"
+          echo "Using ECR URI from stack outputs"
+        elif [ -n "$ECR_URI_DIRECT" ] && [ "$ECR_URI_DIRECT" != "null" ]; then
+          ECR_URI="$ECR_URI_DIRECT"
+          echo "Using ECR URI from direct query"
+        else
+          echo "ERROR: Could not retrieve ECR repository URI"
+          exit 1
+        fi
+        
+        echo "ecr-uri=${ECR_URI}" >> $GITHUB_OUTPUT
+        echo "Final ECR URI: ${ECR_URI}"
 
     - name: Build and push Docker image to ECR
       env:
-        ECR_REGISTRY: ${{ steps.get-outputs.outputs.ecr-uri }}
+        ECR_REGISTRY: ${{ steps.get-ecr-direct.outputs.ecr-uri }}
       run: |
         echo "Building and pushing Docker image to: $ECR_REGISTRY"
+        
+        if [ -z "$ECR_REGISTRY" ]; then
+          echo "ERROR: ECR_REGISTRY is empty!"
+          exit 1
+        fi
         
         aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY
         
