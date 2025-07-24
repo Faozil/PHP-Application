@@ -12,18 +12,7 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      mysql:
-        image: mysql:8.0
-        env:
-          MYSQL_ROOT_PASSWORD: ${{ secrets.TEST_DB_PASSWORD }}
-          MYSQL_DATABASE: testdb
-          MYSQL_USER: testuser
-          MYSQL_PASSWORD: ${{ secrets.TEST_DB_PASSWORD }}
-        ports:
-          - 3306:3306
-        options: --health-cmd="mysqladmin ping -h localhost" --health-interval=10s --health-timeout=5s --health-retries=5
-
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -58,21 +47,36 @@ jobs:
     - name: Create Docker network
       run: docker network create test-network
     
+    - name: Start MySQL container
+      run: |
+        docker run -d \
+          --name mysql-container \
+          --network test-network \
+          --network-alias mysql \
+          -e MYSQL_ROOT_PASSWORD=${{ secrets.TEST_DB_PASSWORD }} \
+          -e MYSQL_DATABASE=testdb \
+          -e MYSQL_USER=testuser \
+          -e MYSQL_PASSWORD=${{ secrets.TEST_DB_PASSWORD }} \
+          -p 3306:3306 \
+          --health-cmd="mysqladmin ping -h localhost --silent" \
+          --health-interval=10s \
+          --health-timeout=5s \
+          --health-retries=10 \
+          mysql:8.0
+    
     - name: Wait for MySQL to be ready
       run: |
         echo "Waiting for MySQL to be ready..."
-        timeout 60 bash -c 'until docker exec $(docker ps -q --filter ancestor=mysql:8.0) mysqladmin ping -h localhost --silent; do 
+        timeout 120 bash -c 'until docker exec mysql-container mysqladmin ping -h localhost --silent; do 
           echo "MySQL is not ready yet..."
-          sleep 2
+          sleep 3
         done'
         echo "MySQL is ready"
+        
+        # Additional verification - check if MySQL is accepting connections
+        docker exec mysql-container mysql -u testuser -p${{ secrets.TEST_DB_PASSWORD }} -e "SELECT 1;" testdb
+        echo "MySQL connection verified"
     
-    - name: Connect MySQL to test network
-      run: |
-        MYSQL_CONTAINER=$(docker ps -q --filter ancestor=mysql:8.0)
-        echo "Connecting MySQL container $MYSQL_CONTAINER to test-network"
-        docker network connect test-network $MYSQL_CONTAINER 
-
     - name: Run PHP application container
       run: |
         docker run -d --name php-app --network test-network -p 8080:80 \
@@ -85,28 +89,37 @@ jobs:
           php-app:${{ env.DOCKER_IMAGE_TAG }}
 
         docker ps --filter name=php-app
+        docker ps --filter name=mysql-container
     
     - name: Check container logs
       run: |
         echo "=== PHP Application Logs ==="
         docker logs php-app || echo "No logs yet"
         echo "=== MySQL Logs ==="
-        docker logs $(docker ps -q --filter ancestor=mysql:8.0) | tail -10 || echo "No MySQL logs"
+        docker logs mysql-container | tail -10 || echo "No MySQL logs"
     
     - name: Test network connectivity
       run: |
         echo "Testing network connectivity..."
-        # Test basic connectivity using curl from host
-        docker exec php-app curl -s http://mysql:3306 || echo "Cannot connect to mysql:3306"
+        
+        # Check if containers are on the same network
+        echo "=== Network inspection ==="
+        docker network inspect test-network
+        
+        # Test basic connectivity using ping instead of curl (MySQL port isn't HTTP)
+        docker exec php-app ping -c 3 mysql || echo "Cannot ping mysql"
         
         # Check if PHP container can resolve mysql hostname
-        docker exec php-app getent hosts mysql || echo "Cannot resolve mysql hostname"
+        docker exec php-app nslookup mysql || echo "Cannot resolve mysql hostname"
+        docker exec php-app getent hosts mysql || echo "Cannot resolve mysql hostname via hosts"
         
         # Test MySQL connection from PHP container
         docker exec php-app php -r "
         try {
           \$pdo = new PDO('mysql:host=mysql;port=3306;dbname=testdb', 'testuser', '${{ secrets.TEST_DB_PASSWORD }}');
           echo 'Database connection successful\n';
+          \$result = \$pdo->query('SELECT 1 as test');
+          echo 'Query test: ' . \$result->fetch()['test'] . \"\n\";
         } catch (Exception \$e) {
           echo 'Database connection failed: ' . \$e->getMessage() . \"\n\";
         }
@@ -115,9 +128,11 @@ jobs:
     - name: Wait for application to be ready
       run: |
         echo "Waiting for application to respond..."
-        timeout 180 bash -c 'until curl -s http://localhost:8080/ || curl -s http://localhost:8080/index.php; do 
+        timeout 180 bash -c 'until curl -s http://localhost:8080/ | grep -q "Simple PHP Application"; do 
           echo "App not ready yet. Checking logs..."
           docker logs php-app | tail -5
+          echo "Checking MySQL status..."
+          docker exec mysql-container mysqladmin ping -h localhost --silent && echo "MySQL is running" || echo "MySQL not responding"
           sleep 10
         done'
         echo "Application is responding"
@@ -132,6 +147,13 @@ jobs:
       run: |
         pip install -r tests/requirements.txt
     
+    - name: Download latest ChromeDriver
+      run: |
+        wget "https://storage.googleapis.com/chrome-for-testing-public/138.0.7153.0/linux64/chromedriver-linux64.zip"
+        unzip chromedriver-linux64.zip
+        chmod +x chromedriver-linux64/chromedriver
+        sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+
     - name: Run application tests
       env:
         APP_URL: http://localhost:8080
@@ -149,44 +171,44 @@ jobs:
         Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
         sleep 3
 
-    - name: Download latest ChromeDriver
-      run: |
-        wget "https://storage.googleapis.com/chrome-for-testing-public/138.0.7153.0/linux64/chromedriver-linux64.zip"
-        unzip chromedriver-linux64.zip
-        chmod +x chromedriver-linux64/chromedriver
-        sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
-
         python -m pytest tests/ -v --tb=short
     
     - name: Run basic smoke tests
       run: |
-
         echo "Testing basic connectivity..."
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ || echo "000")
         echo "HTTP response code: $HTTP_CODE"
 
-        echo "Testing different endpoints..."
-        curl -s http://localhost:8080/ | head -10 || echo "Main endpoint failed"
-        curl -s http://localhost:8080/index.php | head -10 || echo "index.php failed"
-        curl -s http://localhost:8080/health.php | head -10 || echo "health.php failed"
+        echo "Testing application response..."
+        RESPONSE=$(curl -s http://localhost:8080/ || echo "FAILED")
+        echo "Response preview:"
+        echo "$RESPONSE" | head -20
         
-        # Check if any endpoint returns 200
-        if curl -f http://localhost:8080/ || curl -f http://localhost:8080/index.php; then
-          echo "At least one endpoint is accessible"
+        # Check for successful database connection in response
+        if echo "$RESPONSE" | grep -q "Database connection successful\|success"; then
+          echo "✓ Database connection appears successful"
         else
-          echo "No endpoints are accessible"
+          echo "✗ Database connection appears to have failed"
           echo "=== Final container logs ==="
           docker logs php-app
+          docker logs mysql-container | tail -20
+        fi
+        
+        # Check if application loads without critical errors
+        if echo "$RESPONSE" | grep -q "Simple PHP Application"; then
+          echo "✓ Application loaded successfully"
+        else
+          echo "✗ Application failed to load properly"
           exit 1
         fi
     
     - name: Cleanup containers
       if: always()
       run: |
-        docker stop php-app || true
-        docker rm php-app || true
+        docker stop php-app mysql-container || true
+        docker rm php-app mysql-container || true
         docker network rm test-network || true
-
+        
   deploy:
     needs: test
     runs-on: ubuntu-latest
