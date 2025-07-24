@@ -188,7 +188,7 @@ jobs:
         if echo "$RESPONSE" | grep -q "Database connection successful\|success"; then
           echo "Database connection appears successful"
         else
-          echo "✗ Database connection appears to have failed"
+          echo "Database connection appears to have failed"
           echo "Final container logs"
           docker logs php-app
           docker logs mysql-container | tail -20
@@ -201,6 +201,18 @@ jobs:
           echo "Application failed to load properly"
           exit 1
         fi
+        
+        # Clean any existing test data to prevent duplicates
+        echo "Cleaning existing test data..."
+        docker exec php-app php -r "
+        try {
+          \$pdo = new PDO('mysql:host=mysql;port=3306;dbname=testdb', 'testuser', '${{ secrets.TEST_DB_PASSWORD || 'testpassword' }}');
+          \$pdo->exec('DELETE FROM test_table WHERE name LIKE \"Sample Item%\"');
+          echo 'Test data cleaned successfully\n';
+        } catch (Exception \$e) {
+          echo 'Could not clean test data: ' . \$e->getMessage() . \"\n\";
+        }
+        " || echo "Data cleanup failed"
     
     - name: Cleanup containers
       if: always()
