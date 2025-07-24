@@ -231,7 +231,7 @@ Resources:
       RepositoryName: php-app 
       ImageTagMutability: MUTABLE
       ImageScanningConfiguration:
-        scanOnPush: true
+        scanOnPush: false
       Tags:
         - Key: Name
           Value: php-app-ecr

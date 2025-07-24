@@ -335,23 +335,6 @@ jobs:
         fi
         echo "Deploy output: $DEPLOY_OUTPUT"
 
-    - name: Build and push Docker image to ECR
-      if: steps.stack-status.outputs.stack-exists == 'true' && steps.get-ecr-uri.outputs.ecr-uri != ''
-      env:
-        ECR_REGISTRY: ${{ steps.get-ecr-uri.outputs.ecr-uri }}
-      run: |
-        docker build -f Dockerfile -t $ECR_REGISTRY:${{ env.DOCKER_IMAGE_TAG }} .
-        docker push $ECR_REGISTRY:${{ env.DOCKER_IMAGE_TAG }}
-
-    - name: Trigger Auto Scaling Group instance refresh
-      if: steps.stack-status.outputs.stack-exists == 'true' && steps.get-ecr-uri.outputs.ecr-uri != ''
-      run: |
-        aws autoscaling start-instance-refresh \
-          --auto-scaling-group-name php-app-asg \
-          --region ${{ env.AWS_REGION }} \
-          --strategy ROLLING \
-          --preferences '{"MinHealthyPercentage": 50, "InstanceWarmup": 300}'
-
     - name: Wait for stack deployment
       run: |
         if [ "${{ steps.stack-status.outputs.stack-exists }}" = "true" ]; then
@@ -387,6 +370,31 @@ jobs:
         echo "load-balancer-dns=${LOAD_BALANCER_DNS}" >> $GITHUB_OUTPUT
         echo "database-endpoint=${DATABASE_ENDPOINT}" >> $GITHUB_OUTPUT
         echo "Application URL: ${APP_URL}"
+
+    - name: Build and push Docker image to ECR
+      env:
+        ECR_REGISTRY: ${{ steps.get-outputs.outputs.ecr-uri }}
+      run: |
+        echo "Building and pushing Docker image to: $ECR_REGISTRY"
+        
+        aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY
+        
+        # Build and push image
+        docker build -f Dockerfile -t $ECR_REGISTRY:${{ env.DOCKER_IMAGE_TAG }} .
+        docker push $ECR_REGISTRY:${{ env.DOCKER_IMAGE_TAG }}
+        
+        echo "Docker image pushed successfully"
+
+    - name: Trigger Auto Scaling Group instance refresh
+      run: |
+        echo "Starting Auto Scaling Group instance refresh..."
+        aws autoscaling start-instance-refresh \
+          --auto-scaling-group-name php-app-asg \
+          --region ${{ env.AWS_REGION }} \
+          --strategy ROLLING \
+          --preferences '{"MinHealthyPercentage": 50, "InstanceWarmup": 300}'
+        
+        echo "Instance refresh initiated"
 
     - name: Wait for application to be accessible
       run: |
