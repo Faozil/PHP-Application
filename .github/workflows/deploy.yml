@@ -128,11 +128,6 @@ jobs:
         python-version: '3.11'
         cache: 'pip'
 
-    - name: Set up Chrome for Selenium tests
-      uses: browser-actions/setup-chrome@v1
-      with:
-        chrome-version: stable
-    
     - name: Install Python test dependencies
       run: |
         pip install -r tests/requirements.txt
@@ -162,7 +157,7 @@ jobs:
         unzip chromedriver_linux64.zip
         chmod +x chromedriver
         sudo mv chromedriver /usr/local/bin/
-        
+
         python -m pytest tests/ -v --tb=short
     
     - name: Run basic smoke tests
