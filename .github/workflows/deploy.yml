@@ -186,19 +186,19 @@ jobs:
         
         # Check for successful database connection in response
         if echo "$RESPONSE" | grep -q "Database connection successful\|success"; then
-          echo "✓ Database connection appears successful"
+          echo "Database connection appears successful"
         else
           echo "✗ Database connection appears to have failed"
-          echo "=== Final container logs ==="
+          echo "Final container logs"
           docker logs php-app
           docker logs mysql-container | tail -20
         fi
         
         # Check if application loads without critical errors
         if echo "$RESPONSE" | grep -q "Simple PHP Application"; then
-          echo "✓ Application loaded successfully"
+          echo "Application loaded successfully"
         else
-          echo "✗ Application failed to load properly"
+          echo "Application failed to load properly"
           exit 1
         fi
     
@@ -229,69 +229,75 @@ jobs:
     
     - name: Validate CloudFormation template
       run: |
+        echo "Validating CloudFormation template..."
         aws cloudformation validate-template \
           --template-body file://infrastructure/cloudformation.yaml \
           --region ${{ env.AWS_REGION }}
+        echo "Template validation successful"
     
-    - name: Check if stack exists
-      id: check-stack
+    - name: Check current stack status
+      id: stack-status
       run: |
+        # Check if stack exists and get its current status
         if aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} --region ${{ env.AWS_REGION }} >/dev/null 2>&1; then
-          echo "stack-exists=true" >> $GITHUB_OUTPUT
-          echo "Stack exists, will update"
-        else
-          echo "stack-exists=false" >> $GITHUB_OUTPUT
-          echo "Stack does not exist, will create"
-        fi
-
-    - name: Check and handle stack rollback
-      id: check-rollback
-      run: |
-        # Check stack status
-        STACK_STATUS=$(aws cloudformation describe-stacks \
-          --stack-name ${{ env.STACK_NAME }} \
-          --region ${{ env.AWS_REGION }} \
-          --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DOES_NOT_EXIST")
-        
-        echo "Current stack status: $STACK_STATUS"
-        
-        if [[ "$STACK_STATUS" == *"ROLLBACK"* ]]; then
-          echo "Stack is in rollback state. Attempting to update..."
-          
-          # Update stack to recover from rollback
-          aws cloudformation update-stack \
-            --stack-name ${{ env.STACK_NAME }} \
-            --template-body file://infrastructure/cloudformation.yaml \
-            --parameters \
-              ParameterKey=KeyPairName,ParameterValue=${{ secrets.KEY_PAIR_NAME }} \
-              ParameterKey=DBUsername,ParameterValue=${{ secrets.DB_USERNAME }} \
-              ParameterKey=DBPassword,ParameterValue=${{ secrets.DB_PASSWORD }} \
-              ParameterKey=Environment,ParameterValue=production \
-              ParameterKey=ImageTag,ParameterValue=${{ env.DOCKER_IMAGE_TAG }} \
-            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-            --region ${{ env.AWS_REGION }} || echo "No updates needed or update failed"
-          
-          # Wait for stack update to complete
-          echo "Waiting for stack update to complete..."
-          aws cloudformation wait stack-update-complete \
-            --stack-name ${{ env.STACK_NAME }} \
-            --region ${{ env.AWS_REGION }} || \
-            echo "Stack update completed or no update was needed"
-          
-          # Get final status
-          FINAL_STATUS=$(aws cloudformation describe-stacks \
+          STACK_STATUS=$(aws cloudformation describe-stacks \
             --stack-name ${{ env.STACK_NAME }} \
             --region ${{ env.AWS_REGION }} \
             --query 'Stacks[0].StackStatus' --output text)
-          echo "Final stack status: $FINAL_STATUS"
+          
+          echo "stack-exists=true" >> $GITHUB_OUTPUT
+          echo "stack-status=${STACK_STATUS}" >> $GITHUB_OUTPUT
+          echo "Stack exists with status: $STACK_STATUS"
+          
+          # Handle problematic states
+          case $STACK_STATUS in
+            *ROLLBACK*|*FAILED*)
+              echo "stack-needs-cleanup=true" >> $GITHUB_OUTPUT
+              echo "Stack is in a failed state: $STACK_STATUS"
+              ;;
+            CREATE_COMPLETE|UPDATE_COMPLETE|UPDATE_ROLLBACK_COMPLETE)
+              echo "stack-needs-cleanup=false" >> $GITHUB_OUTPUT
+              echo "Stack is in a stable state"
+              ;;
+            *)
+              echo "stack-needs-cleanup=false" >> $GITHUB_OUTPUT
+              echo "Stack status: $STACK_STATUS"
+              ;;
+          esac
         else
-          echo "Stack is not in rollback state"
+          echo "stack-exists=false" >> $GITHUB_OUTPUT
+          echo "stack-status=DOES_NOT_EXIST" >> $GITHUB_OUTPUT
+          echo "stack-needs-cleanup=false" >> $GITHUB_OUTPUT
+          echo "Stack does not exist, will create new stack"
         fi
+    
+    - name: Handle failed stack state
+      if: steps.stack-status.outputs.stack-needs-cleanup == 'true'
+      run: |
+        echo "Handling failed stack state: ${{ steps.stack-status.outputs.stack-status }}"
         
+        # For rollback states, Delete and recreate
+        if [[ "${{ steps.stack-status.outputs.stack-status }}" == *"ROLLBACK"* ]]; then
+          echo "Deleting stack in rollback state..."
+          aws cloudformation delete-stack \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }}
+          
+          echo "Waiting for stack deletion to complete..."
+          aws cloudformation wait stack-delete-complete \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }}
+          
+          echo "Stack deleted successfully"
+          echo "stack-exists=false" >> $GITHUB_OUTPUT
+        fi
+    
     - name: Deploy CloudFormation stack
       id: deploy-stack
       run: |
-        aws cloudformation deploy \
+        echo "Deploying CloudFormation stack..."
+        
+        DEPLOY_OUTPUT=$(aws cloudformation deploy \
           --template-file infrastructure/cloudformation.yaml \
           --stack-name ${{ env.STACK_NAME }} \
           --parameter-overrides \
@@ -302,67 +308,145 @@ jobs:
             ImageTag=${{ env.DOCKER_IMAGE_TAG }} \
           --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
           --region ${{ env.AWS_REGION }} \
-          --no-fail-on-empty-changeset
-    
-    - name: Wait for stack deployment
-      run: |
-        if [ "${{ steps.check-stack.outputs.stack-exists }}" = "true" ]; then
-          echo "Waiting for stack update to complete..."
-          aws cloudformation wait stack-update-complete \
-            --stack-name ${{ env.STACK_NAME }} \
-            --region ${{ env.AWS_REGION }} || \
-          aws cloudformation wait stack-update-complete \
-            --stack-name ${{ env.STACK_NAME }} \
-            --region ${{ env.AWS_REGION }}
+          --no-fail-on-empty-changeset 2>&1) || {
+          
+          echo "CloudFormation deploy command output:"
+          echo "$DEPLOY_OUTPUT"
+          
+          # Check if it's a "no changes" scenario
+          if echo "$DEPLOY_OUTPUT" | grep -q "No changes to deploy"; then
+            echo "no-changes=true" >> $GITHUB_OUTPUT
+            echo "No changes detected in stack"
+          else
+            echo "Deployment failed"
+            echo "Getting recent stack events for debugging:"
+            aws cloudformation describe-stack-events \
+              --stack-name ${{ env.STACK_NAME }} \
+              --region ${{ env.AWS_REGION }} \
+              --max-items 10 \
+              --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`UPDATE_FAILED`]' || true
+            exit 1
+          fi
+        }
+        
+        # Check if deployment actually happened
+        if echo "$DEPLOY_OUTPUT" | grep -q "No changes to deploy"; then
+          echo "no-changes=true" >> $GITHUB_OUTPUT
+          echo "Stack deployment: No changes detected"
         else
-          echo "Waiting for stack creation to complete..."
-          aws cloudformation wait stack-create-complete \
-            --stack-name ${{ env.STACK_NAME }} \
-            --region ${{ env.AWS_REGION }}
+          echo "no-changes=false" >> $GITHUB_OUTPUT
+          echo "Stack deployment: Changes applied successfully"
         fi
+        
+        echo "Deploy output: $DEPLOY_OUTPUT"
     
     - name: Get deployment outputs
       id: get-outputs
       run: |
+        echo "Retrieving stack outputs..."
         STACK_OUTPUTS=$(aws cloudformation describe-stacks \
           --stack-name ${{ env.STACK_NAME }} \
           --region ${{ env.AWS_REGION }} \
-          --query 'Stacks[0].Outputs')
+          --query 'Stacks[0].Outputs' 2>/dev/null) || {
+          echo "Failed to get stack outputs"
+          echo "Stack may not exist or may be in an invalid state"
+          exit 1
+        }
         
-        LOAD_BALANCER_DNS=$(echo $STACK_OUTPUTS | jq -r '.[] | select(.OutputKey=="LoadBalancerDNS") | .OutputValue')
-        APP_URL="https://${LOAD_BALANCER_DNS}"
+        echo "Stack outputs: $STACK_OUTPUTS"
+        
+        # Extract outputs with error handling
+        LOAD_BALANCER_DNS=$(echo $STACK_OUTPUTS | jq -r '.[] | select(.OutputKey=="LoadBalancerDNS") | .OutputValue' 2>/dev/null)
+        APPLICATION_URL=$(echo $STACK_OUTPUTS | jq -r '.[] | select(.OutputKey=="ApplicationURL") | .OutputValue' 2>/dev/null)
+        
+        if [ "$LOAD_BALANCER_DNS" = "null" ] || [ -z "$LOAD_BALANCER_DNS" ]; then
+          echo "LoadBalancerDNS output not found"
+          echo "Available outputs:"
+          echo $STACK_OUTPUTS | jq -r '.[].OutputKey' 2>/dev/null || echo "Could not parse outputs"
+          exit 1
+        fi
+        
+        # Use ApplicationURL if available, otherwise construct from LoadBalancerDNS
+        if [ "$APPLICATION_URL" != "null" ] && [ -n "$APPLICATION_URL" ]; then
+          APP_URL="$APPLICATION_URL"
+        else
+          APP_URL="http://${LOAD_BALANCER_DNS}"
+        fi
         
         echo "app-url=${APP_URL}" >> $GITHUB_OUTPUT
         echo "load-balancer-dns=${LOAD_BALANCER_DNS}" >> $GITHUB_OUTPUT
         
-        echo "Application deployed to: ${APP_URL}"
+        echo "Application URL: ${APP_URL}"
+        echo "Load Balancer DNS: ${LOAD_BALANCER_DNS}"
     
     - name: Wait for application to be accessible
       run: |
-        echo "Waiting for application to be accessible at ${{ steps.get-outputs.outputs.app-url }}"
-        timeout 600 bash -c 'until curl -k -s "${{ steps.get-outputs.outputs.app-url }}" | grep -q "OK\|healthy"; do 
-          echo "Waiting for app to be accessible..."
-          sleep 10
-        done'
-        echo "Application is accessible"
+        APP_URL="${{ steps.get-outputs.outputs.app-url }}"
+        echo "Waiting for application to be accessible at: $APP_URL"
+        
+        # Function to check application health
+        check_app_health() {
+          local response=$(curl -s -w "%{http_code}" "$APP_URL" 2>/dev/null | tail -n1)
+          if [ "$response" = "200" ]; then
+            local content=$(curl -s "$APP_URL" 2>/dev/null)
+            if echo "$content" | grep -q "Simple PHP Application"; then
+              return 0
+            fi
+          fi
+          return 1
+        }
+        
+        # Wait up to 5 minutes for the application
+        TIMEOUT=300
+        ELAPSED=0
+        INTERVAL=15
+        
+        while [ $ELAPSED -lt $TIMEOUT ]; do
+          if check_app_health; then
+            echo "Application is accessible and responding correctly"
+            break
+          fi
     
     - name: Run post-deployment integration tests
+      if: steps.deploy-stack.outputs.no-changes != 'true'
       env:
         APP_URL: ${{ steps.get-outputs.outputs.app-url }}
       run: |
+        echo "Running integration tests against deployed application..."
+        echo "Target URL: $APP_URL"
+        
         # Set up Python for integration tests
         pip install -r tests/requirements.txt
         
         # Run integration tests against deployed application
-        python -m pytest tests/ -v --tb=short
+        python -m pytest tests/ -v --tb=short --maxfail=3
     
-    - name: Update deployment status
+    - name: Deployment summary
       if: always()
       run: |
-        if [ "${{ job.status }}" = "success" ]; then
+        echo "=== DEPLOYMENT SUMMARY ==="
+        echo "Stack Name: ${{ env.STACK_NAME }}"
+        echo "Region: ${{ env.AWS_REGION }}"
+        echo "Image Tag: ${{ env.DOCKER_IMAGE_TAG }}"
+        
+        if [ "${{ steps.deploy-stack.outputs.no-changes }}" = "true" ]; then
+          echo "Status: No changes deployed (stack was already up to date)"
+        elif [ "${{ job.status }}" = "success" ]; then
           echo "Deployment completed successfully"
           echo "Application URL: ${{ steps.get-outputs.outputs.app-url }}"
           echo "Load Balancer DNS: ${{ steps.get-outputs.outputs.load-balancer-dns }}"
         else
           echo "Deployment failed"
+          
+          # Show recent stack events if deployment failed
+          if [ "$FINAL_STATUS" != "UNKNOWN" ]; then
+            echo "Recent stack events:"
+            aws cloudformation describe-stack-events \
+              --stack-name ${{ env.STACK_NAME }} \
+              --region ${{ env.AWS_REGION }} \
+              --max-items 5 \
+              --query 'StackEvents[*].[Timestamp,ResourceStatus,ResourceType,LogicalResourceId,ResourceStatusReason]' \
+              --output table 2>/dev/null || echo "Could not retrieve stack events"
+          fi
         fi
+        echo "=========================="
