@@ -154,6 +154,15 @@ jobs:
         Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
         sleep 3
 
+    - name: Download latest ChromeDriver
+      run: |
+        LATEST_VERSION=$(curl -s https://chromedriver.storage.googleapis.com/LATEST_RELEASE)
+        echo "Latest ChromeDriver version: $LATEST_VERSION"
+        wget "https://chromedriver.storage.googleapis.com/$LATEST_VERSION/chromedriver_linux64.zip"
+        unzip chromedriver_linux64.zip
+        chmod +x chromedriver
+        sudo mv chromedriver /usr/local/bin/
+        
         python -m pytest tests/ -v --tb=short
     
     - name: Run basic smoke tests
