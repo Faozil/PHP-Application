@@ -96,9 +96,22 @@ jobs:
     - name: Test network connectivity
       run: |
         echo "Testing network connectivity..."
-        docker exec php-app ping -c 3 mysql || echo "Cannot ping mysql from php-app"
-        docker exec php-app nslookup mysql || echo "Cannot resolve mysql hostname"
-    
+        # Test basic connectivity using curl from host
+        docker exec php-app curl -s http://mysql:3306 || echo "Cannot connect to mysql:3306"
+        
+        # Check if PHP container can resolve mysql hostname
+        docker exec php-app getent hosts mysql || echo "Cannot resolve mysql hostname"
+        
+        # Test MySQL connection from PHP container
+        docker exec php-app php -r "
+        try {
+          \$pdo = new PDO('mysql:host=mysql;port=3306;dbname=testdb', 'testuser', '${{ secrets.TEST_DB_PASSWORD }}');
+          echo 'Database connection successful\n';
+        } catch (Exception \$e) {
+          echo 'Database connection failed: ' . \$e->getMessage() . \"\n\";
+        }
+        " || echo "PHP database test failed"
+
     - name: Wait for application to be ready
       run: |
         echo "Waiting for application to respond..."
@@ -114,6 +127,11 @@ jobs:
       with:
         python-version: '3.11'
         cache: 'pip'
+
+    - name: Set up Chrome for Selenium tests
+      uses: browser-actions/setup-chrome@v1
+      with:
+        chrome-version: stable
     
     - name: Install Python test dependencies
       run: |
@@ -127,7 +145,15 @@ jobs:
         DB_NAME: testdb
         DB_USERNAME: testuser
         DB_PASSWORD: ${{ secrets.TEST_DB_PASSWORD }}
+        DISPLAY: :99
       run: |
+        # Start virtual display for headless Chrome
+        sudo apt-get update -qq
+        sudo apt-get install -y xvfb
+        export DISPLAY=:99
+        Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+        sleep 3
+
         python -m pytest tests/ -v --tb=short
     
     - name: Run basic smoke tests
