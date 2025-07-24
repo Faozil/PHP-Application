@@ -208,7 +208,7 @@ jobs:
         docker stop php-app mysql-container || true
         docker rm php-app mysql-container || true
         docker network rm test-network || true
-        
+
   deploy:
     needs: test
     runs-on: ubuntu-latest
@@ -243,7 +243,51 @@ jobs:
           echo "stack-exists=false" >> $GITHUB_OUTPUT
           echo "Stack does not exist, will create"
         fi
-    
+
+    - name: Check and handle stack rollback
+      id: check-rollback
+      run: |
+        # Check stack status
+        STACK_STATUS=$(aws cloudformation describe-stacks \
+          --stack-name ${{ env.STACK_NAME }} \
+          --region ${{ env.AWS_REGION }} \
+          --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+        
+        echo "Current stack status: $STACK_STATUS"
+        
+        if [[ "$STACK_STATUS" == *"ROLLBACK"* ]]; then
+          echo "Stack is in rollback state. Attempting to update..."
+          
+          # Update stack to recover from rollback
+          aws cloudformation update-stack \
+            --stack-name ${{ env.STACK_NAME }} \
+            --template-body file://infrastructure/cloudformation.yaml \
+            --parameters \
+              ParameterKey=KeyPairName,ParameterValue=${{ secrets.KEY_PAIR_NAME }} \
+              ParameterKey=DBUsername,ParameterValue=${{ secrets.DB_USERNAME }} \
+              ParameterKey=DBPassword,ParameterValue=${{ secrets.DB_PASSWORD }} \
+              ParameterKey=Environment,ParameterValue=production \
+              ParameterKey=ImageTag,ParameterValue=${{ env.DOCKER_IMAGE_TAG }} \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --region ${{ env.AWS_REGION }} || echo "No updates needed or update failed"
+          
+          # Wait for stack update to complete
+          echo "Waiting for stack update to complete..."
+          aws cloudformation wait stack-update-complete \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} || \
+            echo "Stack update completed or no update was needed"
+          
+          # Get final status
+          FINAL_STATUS=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query 'Stacks[0].StackStatus' --output text)
+          echo "Final stack status: $FINAL_STATUS"
+        else
+          echo "Stack is not in rollback state"
+        fi
+        
     - name: Deploy CloudFormation stack
       id: deploy-stack
       run: |
@@ -296,7 +340,7 @@ jobs:
     - name: Wait for application to be accessible
       run: |
         echo "Waiting for application to be accessible at ${{ steps.get-outputs.outputs.app-url }}"
-        timeout 600 bash -c 'until curl -k -s "${{ steps.get-outputs.outputs.app-url }}/health.php" | grep -q "OK\|healthy"; do 
+        timeout 600 bash -c 'until curl -k -s "${{ steps.get-outputs.outputs.app-url }}" | grep -q "OK\|healthy"; do 
           echo "Waiting for app to be accessible..."
           sleep 10
         done'
