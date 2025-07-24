@@ -401,11 +401,15 @@ jobs:
         ELAPSED=0
         INTERVAL=15
         
-        while [ $ELAPSED -lt $TIMEOUT ]; do
+         while [ $ELAPSED -lt $TIMEOUT ]; do
           if check_app_health; then
             echo "Application is accessible and responding correctly"
             break
           fi
+          sleep $INTERVAL
+          ELAPSED=$((ELAPSED + INTERVAL))
+        done
+
     
     - name: Run post-deployment integration tests
       if: steps.deploy-stack.outputs.no-changes != 'true'
