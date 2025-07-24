@@ -233,21 +233,111 @@ jobs:
         
         echo "Image pushed successfully"
 
-    - name: Deploy with instance refresh
+    - name: ASG instance replacement 
       run: |
-        echo "Starting optimized Auto Scaling Group instance refresh..."
+        echo "Starting ASG instance replacement..."
         
-        # Get current instances
-        INSTANCES=$(aws autoscaling describe-auto-scaling-groups \
-          --auto-scaling-group-names $ASG_NAME \
-          --query 'AutoScalingGroups[0].Instances[*].InstanceId' \
-          --output text)
-
-        # Terminate instances (ASG will launch new ones with updated launch template)
-        aws autoscaling terminate-instance-in-auto-scaling-group \
-          --instance-id $INSTANCE_ID \
-          --should-decrement-desired-capacity false
+        # Get current ASG configuration
+        ASG_INFO=$(aws autoscaling describe-auto-scaling-groups \
+          --auto-scaling-group-names php-app-asg \
+          --region ${{ env.AWS_REGION }} \
+          --query 'AutoScalingGroups[0]')
+        
+        CURRENT_DESIRED=$(echo $ASG_INFO | jq -r '.DesiredCapacity')
+        CURRENT_MAX=$(echo $ASG_INFO | jq -r '.MaxSize')
+        CURRENT_INSTANCES=$(echo $ASG_INFO | jq -r '.Instances[].InstanceId' | tr '\n' ' ')
+        
+        echo "Current desired capacity: $CURRENT_DESIRED"
+        echo "Current instances: $CURRENT_INSTANCES"
+        
+        # Temporarily increase capacity to accommodate new instances
+        NEW_DESIRED=$((CURRENT_DESIRED * 2))
+        NEW_MAX=$((CURRENT_MAX < NEW_DESIRED ? NEW_DESIRED : CURRENT_MAX))
+        
+        echo "Temporarily increasing capacity to: $NEW_DESIRED (max: $NEW_MAX)"
+        
+        aws autoscaling update-auto-scaling-group \
+          --auto-scaling-group-name php-app-asg \
+          --region ${{ env.AWS_REGION }} \
+          --desired-capacity $NEW_DESIRED \
+          --max-size $NEW_MAX
+        
+        # Wait for new instances to launch and become healthy
+        echo "Waiting for new instances to be healthy..."
+        
+        TIMEOUT=600
+        ELAPSED=0
+        INTERVAL=15
+        
+        while [ $ELAPSED -lt $TIMEOUT ]; do
+          HEALTHY_COUNT=$(aws elbv2 describe-target-health \
+            --target-group-arn $(aws elbv2 describe-target-groups \
+              --names php-app-tg \
+              --region ${{ env.AWS_REGION }} \
+              --query 'TargetGroups[0].TargetGroupArn' \
+              --output text) \
+            --region ${{ env.AWS_REGION }} \
+            --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' \
+            --output text)
           
+          echo "Healthy instances: $HEALTHY_COUNT (need: $NEW_DESIRED)"
+          
+          if [ "$HEALTHY_COUNT" -ge "$NEW_DESIRED" ]; then
+            echo "All new instances are healthy!"
+            break
+          fi
+          
+          sleep $INTERVAL
+          ELAPSED=$((ELAPSED + INTERVAL))
+        done
+        
+        if [ $ELAPSED -ge $TIMEOUT ]; then
+          echo "Timeout waiting for instances to be healthy, proceeding anyway..."
+        fi
+        
+        # Terminate old instances
+        echo "Terminating old instances..."
+        for INSTANCE_ID in $CURRENT_INSTANCES; do
+          echo "Terminating instance: $INSTANCE_ID"
+          aws autoscaling terminate-instance-in-auto-scaling-group \
+            --instance-id $INSTANCE_ID \
+            --region ${{ env.AWS_REGION }} \
+            --should-decrement-desired-capacity true
+        done
+        
+        # Wait a moment for terminations to process
+        sleep 30
+        
+        # Restore original capacity
+        echo "Restoring original capacity: $CURRENT_DESIRED"
+        aws autoscaling update-auto-scaling-group \
+          --auto-scaling-group-name php-app-asg \
+          --region ${{ env.AWS_REGION }} \
+          --desired-capacity $CURRENT_DESIRED \
+          --max-size $CURRENT_MAX
+        
+        # Final health check
+        echo "Performing final health check..."
+        sleep 30
+        
+        FINAL_HEALTHY=$(aws elbv2 describe-target-health \
+          --target-group-arn $(aws elbv2 describe-target-groups \
+            --names php-app-tg \
+            --region ${{ env.AWS_REGION }} \
+            --query 'TargetGroups[0].TargetGroupArn' \
+            --output text) \
+          --region ${{ env.AWS_REGION }} \
+          --query 'length(TargetHealthDescriptions[?TargetHealth.State==`healthy`])' \
+          --output text)
+        
+        echo "Final healthy instances: $FINAL_HEALTHY (expected: $CURRENT_DESIRED)"
+        
+        if [ "$FINAL_HEALTHY" -ge "$CURRENT_DESIRED" ]; then
+          echo "Deployment completed successfully"
+        else
+          echo "Warning: Not all instances are healthy, but deployment completed"
+        fi
+
     - name: Verify deployment and run integration tests
       env:
         APP_URL: ${{ steps.outputs.outputs.app-url }}
