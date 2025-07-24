@@ -431,8 +431,8 @@ jobs:
         aws autoscaling start-instance-refresh \
           --auto-scaling-group-name php-app-asg \
           --region ${{ env.AWS_REGION }} \
-          --strategy ROLLING \
-          --preferences '{"MinHealthyPercentage": 50, "InstanceWarmup": 300}'
+          --strategy Rolling \
+          --preferences '{"MinHealthyPercentage": 50, "InstanceWarmup": 120, "CheckpointPercentages": [50, 100], "CheckpointDelay": 60}'
         
         echo "Instance refresh initiated"
 
