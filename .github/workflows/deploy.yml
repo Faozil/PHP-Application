@@ -436,6 +436,129 @@ jobs:
         
         echo "Instance refresh initiated"
 
+    - name: Wait for instance refresh to complete
+      run: |
+        echo "Waiting for Auto Scaling Group instance refresh to complete..."
+      
+        REFRESH_ID=$(aws autoscaling describe-instance-refreshes \
+          --auto-scaling-group-name php-app-asg \
+          --region ${{ env.AWS_REGION }} \
+          --query 'InstanceRefreshes[0].InstanceRefreshId' \
+          --output text)
+        
+        echo "Monitoring instance refresh ID: $REFRESH_ID"
+        
+        # Waiting for the refresh to be complete
+        TIMEOUT=300
+        ELAPSED=0
+        INTERVAL=30
+        
+        while [ $ELAPSED -lt $TIMEOUT ]; do
+          STATUS=$(aws autoscaling describe-instance-refreshes \
+            --auto-scaling-group-name php-app-asg \
+            --region ${{ env.AWS_REGION }} \
+            --instance-refresh-ids $REFRESH_ID \
+            --query 'InstanceRefreshes[0].Status' \
+            --output text)
+          
+          PERCENTAGE=$(aws autoscaling describe-instance-refreshes \
+            --auto-scaling-group-name php-app-asg \
+            --region ${{ env.AWS_REGION }} \
+            --instance-refresh-ids $REFRESH_ID \
+            --query 'InstanceRefreshes[0].PercentageComplete' \
+            --output text)
+          
+          echo "Instance refresh status: $STATUS ($PERCENTAGE% complete)"
+          
+          case $STATUS in
+            "Successful")
+              echo "Instance refresh completed successfully!"
+              break
+              ;;
+            "Failed"|"Cancelled")
+              echo "Instance refresh failed with status: $STATUS"
+
+              # Why it failed
+              aws autoscaling describe-instance-refreshes \
+                --auto-scaling-group-name php-app-asg \
+                --region ${{ env.AWS_REGION }} \
+                --instance-refresh-ids $REFRESH_ID \
+                --query 'InstanceRefreshes[0].StatusReason' \
+                --output text
+              exit 1
+              ;;
+            "InProgress"|"Pending")
+              echo "Instance refresh still in progress, waiting..."
+              sleep $INTERVAL
+              ELAPSED=$((ELAPSED + INTERVAL))
+              ;;
+            *)
+              echo "Unknown status: $STATUS"
+              sleep $INTERVAL
+              ELAPSED=$((ELAPSED + INTERVAL))
+              ;;
+          esac
+        done
+        
+        if [ $ELAPSED -ge $TIMEOUT ]; then
+          echo "Timeout waiting for instance refresh to complete"
+          exit 1
+        fi
+        
+        echo "Instance refresh completed, new instances should be running the updated application"
+
+    - name: Verify new instances are healthy
+      run: |
+        echo "Checking Auto Scaling Group instance health..."
+        
+        INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+          --auto-scaling-group-names php-app-asg \
+          --region ${{ env.AWS_REGION }} \
+          --query 'AutoScalingGroups[0].Instances[*].InstanceId' \
+          --output text)
+        
+        echo "Current instances: $INSTANCE_IDS"
+        
+        # Checking the target group health
+        TARGET_GROUP_ARN=$(aws elbv2 describe-target-groups \
+          --names php-app-tg \
+          --region ${{ env.AWS_REGION }} \
+          --query 'TargetGroups[0].TargetGroupArn' \
+          --output text)
+        
+        echo "Checking target group health..."
+        aws elbv2 describe-target-health \
+          --target-group-arn $TARGET_GROUP_ARN \
+          --region ${{ env.AWS_REGION }} \
+          --query 'TargetHealthDescriptions[*].[Target.Id,TargetHealth.State,TargetHealth.Description]' \
+          --output table
+    
+        echo "Waiting for all targets to be healthy..."
+        TIMEOUT=300
+        ELAPSED=0
+        INTERVAL=30
+        
+        while [ $ELAPSED -lt $TIMEOUT ]; do
+          UNHEALTHY_COUNT=$(aws elbv2 describe-target-health \
+            --target-group-arn $TARGET_GROUP_ARN \
+            --region ${{ env.AWS_REGION }} \
+            --query 'length(TargetHealthDescriptions[?TargetHealth.State!=`healthy`])' \
+            --output text)
+          
+          if [ "$UNHEALTHY_COUNT" = "0" ]; then
+            echo "All targets are healthy!"
+            break
+          fi
+          
+          echo "Still have $UNHEALTHY_COUNT unhealthy targets, waiting..."
+          sleep $INTERVAL
+          ELAPSED=$((ELAPSED + INTERVAL))
+        done
+        
+        if [ $ELAPSED -ge $TIMEOUT ]; then
+          echo "Warning: Timeout waiting for all targets to be healthy"
+        fi
+
     - name: Wait for application to be accessible
       run: |
         APP_URL="${{ steps.get-outputs.outputs.app-url }}"
