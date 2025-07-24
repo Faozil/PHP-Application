@@ -10,5 +10,13 @@
   {
     "ParameterKey": "DBPassword",
     "ParameterValue": "your-secure-password"
+  },
+  {
+    "ParameterKey": "DockerImageUri",
+    "ParameterValue": "your-docker-image-uri"
+  },
+  {
+    "ParameterKey": "ImageTag",
+    "ParameterValue": "latest"
   }
 ]

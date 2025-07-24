@@ -17,6 +17,15 @@ Parameters:
     MinLength: 8
     Description: Database password
 
+  DockerImageUri:
+    Type: String
+    Description: URI of the Docker image in ECR
+    
+  ImageTag:
+    Type: String
+    Description: Tag for the Docker image
+    Default: latest
+
 Resources:
   VPC:
     Type: AWS::EC2::VPC
@@ -212,6 +221,17 @@ Resources:
       Port: 80
       Protocol: HTTP
 
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: php-app 
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        scanOnPush: true
+      Tags:
+        - Key: Name
+          Value: php-app-ecr
+
   EC2Role:
     Type: AWS::IAM::Role
     Properties:
@@ -254,31 +274,18 @@ Resources:
             service docker start
             usermod -a -G docker ec2-user
             
-            # Install Docker Compose
-            curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-            chmod +x /usr/local/bin/docker-compose
-            
             # Install CloudWatch agent
             yum install -y amazon-cloudwatch-agent
             
-            # Clone repository and run application
-            yum install -y git
-            cd /home/ec2-user
-            git clone https://github.com/Faozil/PHP-Application.git app
-            cd app
-            
-            # Create environment file
-            cat << EOF > .env
-            DB_HOST=${Database.Endpoint.Address}
-            DB_USERNAME=${DBUsername}
-            DB_PASSWORD=${DBPassword}
-            DB_NAME=testdb
-            DB_PORT=3306
-            EOF
-            
-            # Build and run the application
-            docker build -f Dockerfile -t php-app .
-            docker run -d --name php-app -p 80:80 --env-file .env php-app
+            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${DockerImageUri}
+
+            docker run -d --name php-app -p 80:80 \
+            -e DB_HOST=${Database.Endpoint.Address} \
+            -e DB_USERNAME=${DBUsername} \
+            -e DB_PASSWORD=${DBPassword} \
+            -e DB_NAME=testdb \
+            -e DB_PORT=3306 \
+            ${DockerImageUri}:${ImageTag}
             
             # Setup CloudWatch monitoring
             cat << 'EOF' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
@@ -353,3 +360,9 @@ Outputs:
     Value: !GetAtt Database.Endpoint.Address
     Export:
       Name: !Sub "${AWS::StackName}-DatabaseEndpoint"
+
+  ECRRepositoryUri:
+    Description: URI of the ECR repository
+    Value: !GetAtt ECRRepository.RepositoryUri
+    Export:
+      Name: !Sub "${AWS::StackName}-ECRRepositoryUri"
