@@ -153,8 +153,8 @@ jobs:
       run: |
         wget "https://storage.googleapis.com/chrome-for-testing-public/138.0.7153.0/linux64/chromedriver-linux64.zip"
         unzip chromedriver-linux64.zip
-        chmod +x chromedriver
-        sudo mv chromedriver /usr/local/bin/
+        chmod +x chromedriver-linux64/chromedriver
+        sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
 
         python -m pytest tests/ -v --tb=short
     
