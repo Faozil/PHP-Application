@@ -48,7 +48,8 @@ header('Content-Type: text/html; charset=utf-8');
                 $sampleData = [
                     ['Sample Item 1', 'This is a test value 1'],
                     ['Sample Item 2', 'This is a test value 2'],
-                    ['Sample Item 3', 'This is a test value 3']
+                    ['Sample Item 3', 'This is a test value 3'],
+                    ['Sample Item 4', 'This is a test value 4']
                 ];
                 
                 $insertStmt = $pdo->prepare("INSERT INTO test (name, value) VALUES (?, ?)");
