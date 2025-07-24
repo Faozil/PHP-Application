@@ -449,7 +449,7 @@ jobs:
         echo "Monitoring instance refresh ID: $REFRESH_ID"
         
         # Waiting for the refresh to be complete
-        TIMEOUT=300
+        TIMEOUT=600
         ELAPSED=0
         INTERVAL=30
         
