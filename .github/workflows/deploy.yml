@@ -237,63 +237,17 @@ jobs:
       run: |
         echo "Starting optimized Auto Scaling Group instance refresh..."
         
-        # Alternative: Use blue/green deployment for even faster updates
-        # This completely replaces instances instead of rolling updates
-        REFRESH_ID=$(aws autoscaling start-instance-refresh \
-          --auto-scaling-group-name php-app-asg \
-          --region ${{ env.AWS_REGION }} \
-          --strategy Rolling \
-          --preferences '{
-            "MinHealthyPercentage": 0,
-            "InstanceWarmup": 30,
-            "CheckpointPercentages": [],
-            "CheckpointDelay": 0,
-            "SkipMatching": false,
-            "ScaleInProtectedInstances": "Ignore"
-          }' \
-          --query 'InstanceRefreshId' --output text)
-        
-        echo "Instance refresh ID: $REFRESH_ID"
-        
-        # Monitor progress with shorter intervals
-        TIMEOUT=600
-        ELAPSED=0
-        INTERVAL=15
-        
-        while [ $ELAPSED -lt $TIMEOUT ]; do
-          REFRESH_STATUS=$(aws autoscaling describe-instance-refreshes \
-            --auto-scaling-group-name php-app-asg \
-            --region ${{ env.AWS_REGION }} \
-            --instance-refresh-ids $REFRESH_ID \
-            --query 'InstanceRefreshes[0].[Status,PercentageComplete]' \
-            --output text)
-          
-          STATUS=$(echo $REFRESH_STATUS | cut -f1)
-          PERCENTAGE=$(echo $REFRESH_STATUS | cut -f2)
-          
-          echo "Instance refresh: $STATUS ($PERCENTAGE% complete)"
-          
-          case $STATUS in
-            "Successful")
-              echo "Instance refresh completed successfully!"
-              break
-              ;;
-            "Failed"|"Cancelled")
-              echo "Instance refresh failed: $STATUS"
-              exit 1
-              ;;
-            *)
-              sleep $INTERVAL
-              ELAPSED=$((ELAPSED + INTERVAL))
-              ;;
-          esac
-        done
-        
-        if [ $ELAPSED -ge $TIMEOUT ]; then
-          echo "Timeout waiting for instance refresh"
-          exit 1
-        fi
+        # Get current instances
+        INSTANCES=$(aws autoscaling describe-auto-scaling-groups \
+          --auto-scaling-group-names $ASG_NAME \
+          --query 'AutoScalingGroups[0].Instances[*].InstanceId' \
+          --output text)
 
+        # Terminate instances (ASG will launch new ones with updated launch template)
+        aws autoscaling terminate-instance-in-auto-scaling-group \
+          --instance-id $INSTANCE_ID \
+          --should-decrement-desired-capacity false
+          
     - name: Verify deployment and run integration tests
       env:
         APP_URL: ${{ steps.outputs.outputs.app-url }}
