@@ -20,11 +20,15 @@ Parameters:
   DockerImageUri:
     Type: String
     Description: URI of the Docker image in ECR
+    Default: ""
     
   ImageTag:
     Type: String
     Description: Tag for the Docker image
     Default: latest
+
+Conditions:
+  HasDockerImage: !Not [!Equals [!Ref DockerImageUri, ""]]
 
 Resources:
   VPC:
@@ -232,6 +236,29 @@ Resources:
         - Key: Name
           Value: php-app-ecr
 
+  ECRPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ECRAccessPolicy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - ecr:GetAuthorizationToken
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: '*'
+      Roles:
+        - !Ref EC2Role
+
   EC2Role:
     Type: AWS::IAM::Role
     Properties:
@@ -277,15 +304,59 @@ Resources:
             # Install CloudWatch agent
             yum install -y amazon-cloudwatch-agent
             
-            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${DockerImageUri}
-
-            docker run -d --name php-app -p 80:80 \
-            -e DB_HOST=${Database.Endpoint.Address} \
-            -e DB_USERNAME=${DBUsername} \
-            -e DB_PASSWORD=${DBPassword} \
-            -e DB_NAME=testdb \
-            -e DB_PORT=3306 \
-            ${DockerImageUri}:${ImageTag}
+            # Check if Docker image is provided
+            if [ "${DockerImageUri}" != "" ]; then
+              echo "Docker image URI provided: ${DockerImageUri}"
+              
+              # Login to ECR and pull/run the application
+              aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${DockerImageUri}
+              
+              # Pull and run the Docker image
+              docker pull ${DockerImageUri}:${ImageTag}
+              docker run -d --name php-app -p 80:80 \
+                -e DB_HOST=${Database.Endpoint.Address} \
+                -e DB_USERNAME=${DBUsername} \
+                -e DB_PASSWORD=${DBPassword} \
+                -e DB_NAME=testdb \
+                -e DB_PORT=3306 \
+                ${DockerImageUri}:${ImageTag}
+                
+              echo "Application container started successfully"
+            else
+              echo "No Docker image URI provided - serving placeholder page"
+              
+              # Install and start Apache as fallback
+              yum install -y httpd
+              
+              # Create a placeholder page
+              cat << 'HTMLEOF' > /var/www/html/index.html
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>PHP Application - Deploying</title>
+                <style>
+                    body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
+                    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+                    .status { color: #f39c12; font-size: 18px; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>PHP Application</h1>
+                    <p class="status">Application is being deployed...</p>
+                    <p>Please wait while the application Docker image is being built and deployed.</p>
+                    <p>This page will be updated automatically once the deployment is complete.</p>
+                </div>
+            </body>
+            </html>
+            HTMLEOF
+              
+              # Start Apache
+              service httpd start
+              chkconfig httpd on
+              
+              echo "Placeholder page served via Apache"
+            fi
             
             # Setup CloudWatch monitoring
             cat << 'EOF' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
