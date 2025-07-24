@@ -256,7 +256,7 @@ jobs:
         echo "Instance refresh ID: $REFRESH_ID"
         
         # Monitor progress with shorter intervals
-        TIMEOUT=300
+        TIMEOUT=600
         ELAPSED=0
         INTERVAL=15
         
