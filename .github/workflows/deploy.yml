@@ -412,7 +412,6 @@ jobs:
 
     
     - name: Run post-deployment integration tests
-      if: steps.deploy-stack.outputs.no-changes != 'true'
       env:
         APP_URL: ${{ steps.get-outputs.outputs.app-url }}
       run: |
