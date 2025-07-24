@@ -44,11 +44,12 @@ jobs:
         rm -rf /tmp/.buildx-cache
         mv /tmp/.buildx-cache-new /tmp/.buildx-cache
     
-    - name: Create Docker network
-      run: docker network create test-network
-    
-    - name: Start MySQL container
+    - name: Start test environment
       run: |
+        # Create network and start containers
+        docker network create test-network
+        
+        # Start MySQL with health check
         docker run -d \
           --name mysql-container \
           --network test-network \
@@ -59,26 +60,16 @@ jobs:
           -e MYSQL_PASSWORD=${{ secrets.TEST_DB_PASSWORD }} \
           -p 3306:3306 \
           --health-cmd="mysqladmin ping -h localhost --silent" \
-          --health-interval=10s \
-          --health-timeout=5s \
+          --health-interval=5s \
+          --health-timeout=3s \
           --health-retries=10 \
           mysql:8.0
-    
-    - name: Wait for MySQL to be ready
-      run: |
-        echo "Waiting for MySQL to be ready..."
-        timeout 120 bash -c 'until docker exec mysql-container mysqladmin ping -h localhost --silent; do 
-          echo "MySQL is not ready yet..."
-          sleep 3
-        done'
-        echo "MySQL is ready"
         
-        # Additional verification - check if MySQL is accepting connections
-        docker exec mysql-container mysql -u testuser -p${{ secrets.TEST_DB_PASSWORD }} -e "SELECT 1;" testdb
-        echo "MySQL connection verified"
-    
-    - name: Run PHP application container
-      run: |
+        # Wait for MySQL to be ready
+        echo "Waiting for MySQL to be ready..."
+        timeout 60 bash -c 'until docker exec mysql-container mysqladmin ping -h localhost --silent; do sleep 2; done'
+        
+        # Start PHP application
         docker run -d --name php-app --network test-network -p 8080:80 \
           -e DB_HOST=mysql \
           -e DB_USERNAME=testuser \
@@ -87,74 +78,32 @@ jobs:
           -e DB_PORT=3306 \
           -e APP_ENV=testing \
           php-app:${{ env.DOCKER_IMAGE_TAG }}
-
-        docker ps --filter name=php-app
-        docker ps --filter name=mysql-container
     
-    - name: Check container logs
-      run: |
-        echo "=== PHP Application Logs ==="
-        docker logs php-app || echo "No logs yet"
-        echo "=== MySQL Logs ==="
-        docker logs mysql-container | tail -10 || echo "No MySQL logs"
-    
-    - name: Test network connectivity
-      run: |
-        echo "Testing network connectivity..."
-        
-        # Check if containers are on the same network
-        echo "=== Network inspection ==="
-        docker network inspect test-network
-        
-        # Test basic connectivity using ping instead of curl (MySQL port isn't HTTP)
-        docker exec php-app ping -c 3 mysql || echo "Cannot ping mysql"
-        
-        # Check if PHP container can resolve mysql hostname
-        docker exec php-app nslookup mysql || echo "Cannot resolve mysql hostname"
-        docker exec php-app getent hosts mysql || echo "Cannot resolve mysql hostname via hosts"
-        
-        # Test MySQL connection from PHP container
-        docker exec php-app php -r "
-        try {
-          \$pdo = new PDO('mysql:host=mysql;port=3306;dbname=testdb', 'testuser', '${{ secrets.TEST_DB_PASSWORD }}');
-          echo 'Database connection successful\n';
-          \$result = \$pdo->query('SELECT 1 as test');
-          echo 'Query test: ' . \$result->fetch()['test'] . \"\n\";
-        } catch (Exception \$e) {
-          echo 'Database connection failed: ' . \$e->getMessage() . \"\n\";
-        }
-        " || echo "PHP database test failed"
-
     - name: Wait for application to be ready
       run: |
         echo "Waiting for application to respond..."
-        timeout 180 bash -c 'until curl -s http://localhost:8080/ | grep -q "Simple PHP Application"; do 
-          echo "App not ready yet. Checking logs..."
-          docker logs php-app | tail -5
-          echo "Checking MySQL status..."
-          docker exec mysql-container mysqladmin ping -h localhost --silent && echo "MySQL is running" || echo "MySQL not responding"
-          sleep 10
-        done'
-        echo "Application is responding"
+        timeout 60 bash -c 'until curl -s http://localhost:8080/ | grep -q "Simple PHP Application"; do sleep 5; done'
+        echo "Application is ready"
     
-    - name: Set up Python for testing
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-        cache: 'pip'
-
-    - name: Install Python test dependencies
+    - name: Set up test environment
       run: |
+        # Install Python dependencies
         pip install -r tests/requirements.txt
-    
-    - name: Download latest ChromeDriver
-      run: |
-        wget "https://storage.googleapis.com/chrome-for-testing-public/138.0.7153.0/linux64/chromedriver-linux64.zip"
-        unzip chromedriver-linux64.zip
+        
+        # Download ChromeDriver
+        wget -q "https://storage.googleapis.com/chrome-for-testing-public/138.0.7153.0/linux64/chromedriver-linux64.zip"
+        unzip -q chromedriver-linux64.zip
         chmod +x chromedriver-linux64/chromedriver
         sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+        
+        # Set up virtual display
+        sudo apt-get update -qq
+        sudo apt-get install -y xvfb
+        export DISPLAY=:99
+        Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+        sleep 2
 
-    - name: Run application tests
+    - name: Run tests
       env:
         APP_URL: http://localhost:8080
         DB_HOST: localhost
@@ -164,57 +113,22 @@ jobs:
         DB_PASSWORD: ${{ secrets.TEST_DB_PASSWORD }}
         DISPLAY: :99
       run: |
-        # Start virtual display for headless Chrome
-        sudo apt-get update -qq
-        sudo apt-get install -y xvfb
-        export DISPLAY=:99
-        Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
-        sleep 3
-
+        # Run application tests
         python -m pytest tests/ -v --tb=short
-    
-    - name: Run basic smoke tests
-      run: |
-        echo "Testing basic connectivity..."
-        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ || echo "000")
+        
+        # Run basic smoke tests
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/)
         echo "HTTP response code: $HTTP_CODE"
-
-        echo "Testing application response..."
-        RESPONSE=$(curl -s http://localhost:8080/ || echo "FAILED")
-        echo "Response preview:"
-        echo "$RESPONSE" | head -20
         
-        # Check for successful database connection in response
-        if echo "$RESPONSE" | grep -q "Database connection successful\|success"; then
-          echo "Database connection appears successful"
-        else
-          echo "Database connection appears to have failed"
-          echo "Final container logs"
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "Application health check failed"
           docker logs php-app
-          docker logs mysql-container | tail -20
-        fi
-        
-        # Check if application loads without critical errors
-        if echo "$RESPONSE" | grep -q "Simple PHP Application"; then
-          echo "Application loaded successfully"
-        else
-          echo "Application failed to load properly"
           exit 1
         fi
         
-        # Clean any existing test data to prevent duplicates
-        echo "Cleaning existing test data..."
-        docker exec php-app php -r "
-        try {
-          \$pdo = new PDO('mysql:host=mysql;port=3306;dbname=testdb', 'testuser', '${{ secrets.TEST_DB_PASSWORD || 'testpassword' }}');
-          \$pdo->exec('DELETE FROM test_table WHERE name LIKE \"Sample Item%\"');
-          echo 'Test data cleaned successfully\n';
-        } catch (Exception \$e) {
-          echo 'Could not clean test data: ' . \$e->getMessage() . \"\n\";
-        }
-        " || echo "Data cleanup failed"
+        echo "All tests passed successfully"
     
-    - name: Cleanup containers
+    - name: Cleanup test environment
       if: always()
       run: |
         docker stop php-app mysql-container || true
@@ -240,247 +154,124 @@ jobs:
         role-duration-seconds: 3600
 
     - name: Login to Amazon ECR
-      id: login-ecr
       uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Check current stack status
-      id: stack-status
+    - name: Check stack status and handle failures
+      id: stack-check
       run: |
         if aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} --region ${{ env.AWS_REGION }} >/dev/null 2>&1; then
           STACK_STATUS=$(aws cloudformation describe-stacks \
             --stack-name ${{ env.STACK_NAME }} \
             --region ${{ env.AWS_REGION }} \
             --query 'Stacks[0].StackStatus' --output text)
+          
           echo "stack-exists=true" >> $GITHUB_OUTPUT
-          echo "stack-status=${STACK_STATUS}" >> $GITHUB_OUTPUT
-          echo "Stack exists with status: $STACK_STATUS"
-          case $STACK_STATUS in
-            *ROLLBACK*|*FAILED*)
-              echo "stack-needs-cleanup=true" >> $GITHUB_OUTPUT
-              echo "Stack is in a failed state: $STACK_STATUS"
-              ;;
-            *)
-              echo "stack-needs-cleanup=false" >> $GITHUB_OUTPUT
-              echo "Stack is in a stable state"
-              ;;
-          esac
+          echo "Stack status: $STACK_STATUS"
+          
+          # Handle failed states
+          if [[ "$STACK_STATUS" == *"ROLLBACK"* || "$STACK_STATUS" == *"FAILED"* ]]; then
+            echo "Deleting failed stack..."
+            aws cloudformation delete-stack --stack-name ${{ env.STACK_NAME }} --region ${{ env.AWS_REGION }}
+            aws cloudformation wait stack-delete-complete --stack-name ${{ env.STACK_NAME }} --region ${{ env.AWS_REGION }}
+            echo "stack-exists=false" >> $GITHUB_OUTPUT
+          fi
         else
           echo "stack-exists=false" >> $GITHUB_OUTPUT
-          echo "stack-status=DOES_NOT_EXIST" >> $GITHUB_OUTPUT
-          echo "stack-needs-cleanup=false" >> $GITHUB_OUTPUT
-          echo "Stack does not exist, will create new stack"
+          echo "Stack does not exist"
         fi
 
-    - name: Handle failed stack state
-      if: steps.stack-status.outputs.stack-needs-cleanup == 'true'
+    - name: Deploy CloudFormation stack
       run: |
-        echo "Handling failed stack state: ${{ steps.stack-status.outputs.stack-status }}"
-        if [[ "${{ steps.stack-status.outputs.stack-status }}" == *"ROLLBACK"* || "${{ steps.stack-status.outputs.stack-status }}" == *"FAILED"* ]]; then
-          echo "Deleting stack in failed state..."
-          aws cloudformation delete-stack \
-            --stack-name ${{ env.STACK_NAME }} \
-            --region ${{ env.AWS_REGION }}
-          echo "Waiting for stack deletion to complete..."
-          aws cloudformation wait stack-delete-complete \
-            --stack-name ${{ env.STACK_NAME }} \
-            --region ${{ env.AWS_REGION }}
-          echo "Stack deleted successfully"
-          echo "stack-exists=false" >> $GITHUB_OUTPUT
-        fi
-
-    - name: Get ECR Repository URI
-      id: get-ecr-uri
-      if: steps.stack-status.outputs.stack-exists == 'true'
-      run: |
-        ECR_URI=$(aws cloudformation describe-stacks \
-          --stack-name ${{ env.STACK_NAME }} \
-          --region ${{ env.AWS_REGION }} \
-          --query 'Stacks[0].Outputs[?OutputKey==`ECRRepositoryUri`].OutputValue' \
-          --output text 2>/dev/null || echo "")
-        echo "ecr-uri=$ECR_URI" >> $GITHUB_OUTPUT
-        echo "ECR Repository URI: $ECR_URI"
-
-    - name: Validate CloudFormation template
-      run: |
-        echo "Validating CloudFormation template..."
+        echo "Deploying CloudFormation stack..."
+        
         aws cloudformation validate-template \
           --template-body file://infrastructure/cloudformation.yaml \
           --region ${{ env.AWS_REGION }}
-        echo "Template validation successful"
-
-    - name: Deploy CloudFormation stack
-      id: deploy-stack
-      run: |
-        echo "Deploying CloudFormation stack..."
-        PARAMETERS="KeyPairName=${{ secrets.KEY_PAIR_NAME }} DBUsername=${{ secrets.DB_USERNAME }} DBPassword=${{ secrets.DB_PASSWORD }} ImageTag=${{ env.DOCKER_IMAGE_TAG }}"
-        if [ "${{ steps.stack-status.outputs.stack-exists }}" = "true" ] && [ -n "${{ steps.get-ecr-uri.outputs.ecr-uri }}" ]; then
-          PARAMETERS="$PARAMETERS DockerImageUri=${{ steps.get-ecr-uri.outputs.ecr-uri }}"
-        fi
-        DEPLOY_OUTPUT=$(aws cloudformation deploy \
+        
+        aws cloudformation deploy \
           --template-file infrastructure/cloudformation.yaml \
           --stack-name ${{ env.STACK_NAME }} \
-          --parameter-overrides $PARAMETERS \
+          --parameter-overrides \
+            KeyPairName=${{ secrets.KEY_PAIR_NAME }} \
+            DBUsername=${{ secrets.DB_USERNAME }} \
+            DBPassword=${{ secrets.DB_PASSWORD }} \
+            ImageTag=${{ env.DOCKER_IMAGE_TAG }} \
           --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
           --region ${{ env.AWS_REGION }} \
-          --no-fail-on-empty-changeset 2>&1) || {
-          echo "CloudFormation deploy command output:"
-          echo "$DEPLOY_OUTPUT"
-          if echo "$DEPLOY_OUTPUT" | grep -q "No changes to deploy"; then
-            echo "no-changes=true" >> $GITHUB_OUTPUT
-            echo "No changes detected in stack"
-          else
-            echo "Deployment failed"
-            aws cloudformation describe-stack-events \
-              --stack-name ${{ env.STACK_NAME }} \
-              --region ${{ env.AWS_REGION }} \
-              --max-items 10 \
-              --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`UPDATE_FAILED`]' || true
-            exit 1
-          fi
-        }
-        if echo "$DEPLOY_OUTPUT" | grep -q "No changes to deploy"; then
-          echo "no-changes=true" >> $GITHUB_OUTPUT
-          echo "Stack deployment: No changes detected"
-        else
-          echo "no-changes=false" >> $GITHUB_OUTPUT
-          echo "Stack deployment: Changes applied successfully"
-        fi
-        echo "Deploy output: $DEPLOY_OUTPUT"
-
-    - name: Wait for stack deployment
-      run: |
-        if [ "${{ steps.stack-status.outputs.stack-exists }}" = "true" ]; then
-          echo "Waiting for stack update to complete..."
-          aws cloudformation wait stack-update-complete \
-            --stack-name ${{ env.STACK_NAME }} \
-            --region ${{ env.AWS_REGION }} || \
-          aws cloudformation wait stack-update-complete \
-            --stack-name ${{ env.STACK_NAME }} \
-            --region ${{ env.AWS_REGION }}
-        else
-          echo "Waiting for stack creation to complete..."
-          aws cloudformation wait stack-create-complete \
-            --stack-name ${{ env.STACK_NAME }} \
-            --region ${{ env.AWS_REGION }}
-        fi
+          --no-fail-on-empty-changeset
 
     - name: Get deployment outputs
-      id: get-outputs
+      id: outputs
       run: |
-        echo "Retrieving stack outputs..."
         STACK_OUTPUTS=$(aws cloudformation describe-stacks \
           --stack-name ${{ env.STACK_NAME }} \
           --region ${{ env.AWS_REGION }} \
-          --query 'Stacks[0].Outputs' 2>/dev/null) || {
-          echo "Failed to get stack outputs"
-          exit 1
-        }
+          --query 'Stacks[0].Outputs')
+        
+        ECR_URI=$(echo $STACK_OUTPUTS | jq -r '.[] | select(.OutputKey=="ECRRepositoryUri") | .OutputValue')
         LOAD_BALANCER_DNS=$(echo $STACK_OUTPUTS | jq -r '.[] | select(.OutputKey=="LoadBalancerDNS") | .OutputValue')
         DATABASE_ENDPOINT=$(echo $STACK_OUTPUTS | jq -r '.[] | select(.OutputKey=="DatabaseEndpoint") | .OutputValue')
-        APP_URL="http://${LOAD_BALANCER_DNS}"
-        echo "app-url=${APP_URL}" >> $GITHUB_OUTPUT
-        echo "load-balancer-dns=${LOAD_BALANCER_DNS}" >> $GITHUB_OUTPUT
-        echo "database-endpoint=${DATABASE_ENDPOINT}" >> $GITHUB_OUTPUT
-        echo "Application URL: ${APP_URL}"
-    
-    - name: Get ECR Repository URI
-      id: get-ecr-direct
-      run: |
-        echo "Getting ECR repository URI directly..."
-
-        ECR_URI_FROM_STACK=$(aws cloudformation describe-stacks \
-          --stack-name ${{ env.STACK_NAME }} \
-          --region ${{ env.AWS_REGION }} \
-          --query 'Stacks[0].Outputs[?OutputKey==`ECRRepositoryUri`].OutputValue' \
-          --output text 2>/dev/null || echo "")
-        
-        echo "ECR URI from stack: '$ECR_URI_FROM_STACK'"
-
-         ECR_URI_DIRECT=$(aws ecr describe-repositories \
-          --repository-names php-app \
-          --region ${{ env.AWS_REGION }} \
-          --query 'repositories[0].repositoryUri' \
-          --output text 2>/dev/null || echo "")
-        
-        echo "ECR URI direct query: '$ECR_URI_DIRECT'"
-
-        if [ -n "$ECR_URI_FROM_STACK" ] && [ "$ECR_URI_FROM_STACK" != "null" ]; then
-          ECR_URI="$ECR_URI_FROM_STACK"
-          echo "Using ECR URI from stack outputs"
-        elif [ -n "$ECR_URI_DIRECT" ] && [ "$ECR_URI_DIRECT" != "null" ]; then
-          ECR_URI="$ECR_URI_DIRECT"
-          echo "Using ECR URI from direct query"
-        else
-          echo "ERROR: Could not retrieve ECR repository URI"
-          exit 1
-        fi
         
         echo "ecr-uri=${ECR_URI}" >> $GITHUB_OUTPUT
-        echo "Final ECR URI: ${ECR_URI}"
+        echo "app-url=http://${LOAD_BALANCER_DNS}" >> $GITHUB_OUTPUT
+        echo "database-endpoint=${DATABASE_ENDPOINT}" >> $GITHUB_OUTPUT
+        
+        echo "ECR URI: ${ECR_URI}"
+        echo "Application URL: http://${LOAD_BALANCER_DNS}"
 
-    - name: Build and push Docker image to ECR
-      env:
-        ECR_REGISTRY: ${{ steps.get-ecr-direct.outputs.ecr-uri }}
+    - name: Build and push Docker image
       run: |
-        echo "Building and pushing Docker image to: $ECR_REGISTRY"
+        ECR_URI="${{ steps.outputs.outputs.ecr-uri }}"
         
-        if [ -z "$ECR_REGISTRY" ]; then
-          echo "ERROR: ECR_REGISTRY is empty!"
-          exit 1
-        fi
+        echo "Building and pushing to: $ECR_URI"
         
-        aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY
+        aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+          docker login --username AWS --password-stdin $ECR_URI
         
-        # Build and push image
-        docker build -f Dockerfile -t $ECR_REGISTRY:${{ env.DOCKER_IMAGE_TAG }} .
-        docker push $ECR_REGISTRY:${{ env.DOCKER_IMAGE_TAG }}
+        docker build -f Dockerfile -t $ECR_URI:${{ env.DOCKER_IMAGE_TAG }} .
+        docker push $ECR_URI:${{ env.DOCKER_IMAGE_TAG }}
         
-        echo "Docker image pushed successfully"
+        echo "Image pushed successfully"
 
-    - name: Trigger Auto Scaling Group instance refresh
+    - name: Deploy with instance refresh
       run: |
-        echo "Starting Auto Scaling Group instance refresh..."
-        aws autoscaling start-instance-refresh \
+        echo "Starting optimized Auto Scaling Group instance refresh..."
+        
+        # Alternative: Use blue/green deployment for even faster updates
+        # This completely replaces instances instead of rolling updates
+        REFRESH_ID=$(aws autoscaling start-instance-refresh \
           --auto-scaling-group-name php-app-asg \
           --region ${{ env.AWS_REGION }} \
           --strategy Rolling \
-          --preferences '{"MinHealthyPercentage": 50, "InstanceWarmup": 120, "CheckpointPercentages": [50, 100], "CheckpointDelay": 60}'
+          --preferences '{
+            "MinHealthyPercentage": 0,
+            "InstanceWarmup": 30,
+            "CheckpointPercentages": [],
+            "CheckpointDelay": 0,
+            "SkipMatching": false,
+            "ScaleInProtectedInstances": "Ignore"
+          }' \
+          --query 'InstanceRefreshId' --output text)
         
-        echo "Instance refresh initiated"
-
-    - name: Wait for instance refresh to complete
-      run: |
-        echo "Waiting for Auto Scaling Group instance refresh to complete..."
-      
-        REFRESH_ID=$(aws autoscaling describe-instance-refreshes \
-          --auto-scaling-group-name php-app-asg \
-          --region ${{ env.AWS_REGION }} \
-          --query 'InstanceRefreshes[0].InstanceRefreshId' \
-          --output text)
+        echo "Instance refresh ID: $REFRESH_ID"
         
-        echo "Monitoring instance refresh ID: $REFRESH_ID"
-        
-        # Waiting for the refresh to be complete
-        TIMEOUT=600
+        # Monitor progress with shorter intervals
+        TIMEOUT=300
         ELAPSED=0
-        INTERVAL=30
+        INTERVAL=15
         
         while [ $ELAPSED -lt $TIMEOUT ]; do
-          STATUS=$(aws autoscaling describe-instance-refreshes \
+          REFRESH_STATUS=$(aws autoscaling describe-instance-refreshes \
             --auto-scaling-group-name php-app-asg \
             --region ${{ env.AWS_REGION }} \
             --instance-refresh-ids $REFRESH_ID \
-            --query 'InstanceRefreshes[0].Status' \
+            --query 'InstanceRefreshes[0].[Status,PercentageComplete]' \
             --output text)
           
-          PERCENTAGE=$(aws autoscaling describe-instance-refreshes \
-            --auto-scaling-group-name php-app-asg \
-            --region ${{ env.AWS_REGION }} \
-            --instance-refresh-ids $REFRESH_ID \
-            --query 'InstanceRefreshes[0].PercentageComplete' \
-            --output text)
+          STATUS=$(echo $REFRESH_STATUS | cut -f1)
+          PERCENTAGE=$(echo $REFRESH_STATUS | cut -f2)
           
-          echo "Instance refresh status: $STATUS ($PERCENTAGE% complete)"
+          echo "Instance refresh: $STATUS ($PERCENTAGE% complete)"
           
           case $STATUS in
             "Successful")
@@ -488,24 +279,10 @@ jobs:
               break
               ;;
             "Failed"|"Cancelled")
-              echo "Instance refresh failed with status: $STATUS"
-
-              # Why it failed
-              aws autoscaling describe-instance-refreshes \
-                --auto-scaling-group-name php-app-asg \
-                --region ${{ env.AWS_REGION }} \
-                --instance-refresh-ids $REFRESH_ID \
-                --query 'InstanceRefreshes[0].StatusReason' \
-                --output text
+              echo "Instance refresh failed: $STATUS"
               exit 1
               ;;
-            "InProgress"|"Pending")
-              echo "Instance refresh still in progress, waiting..."
-              sleep $INTERVAL
-              ELAPSED=$((ELAPSED + INTERVAL))
-              ;;
             *)
-              echo "Unknown status: $STATUS"
               sleep $INTERVAL
               ELAPSED=$((ELAPSED + INTERVAL))
               ;;
@@ -513,141 +290,43 @@ jobs:
         done
         
         if [ $ELAPSED -ge $TIMEOUT ]; then
-          echo "Timeout waiting for instance refresh to complete"
+          echo "Timeout waiting for instance refresh"
           exit 1
         fi
-        
-        echo "Instance refresh completed, new instances should be running the updated application"
 
-    - name: Verify new instances are healthy
-      run: |
-        echo "Checking Auto Scaling Group instance health..."
-        
-        INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
-          --auto-scaling-group-names php-app-asg \
-          --region ${{ env.AWS_REGION }} \
-          --query 'AutoScalingGroups[0].Instances[*].InstanceId' \
-          --output text)
-        
-        echo "Current instances: $INSTANCE_IDS"
-        
-        # Checking the target group health
-        TARGET_GROUP_ARN=$(aws elbv2 describe-target-groups \
-          --names php-app-tg \
-          --region ${{ env.AWS_REGION }} \
-          --query 'TargetGroups[0].TargetGroupArn' \
-          --output text)
-        
-        echo "Checking target group health..."
-        aws elbv2 describe-target-health \
-          --target-group-arn $TARGET_GROUP_ARN \
-          --region ${{ env.AWS_REGION }} \
-          --query 'TargetHealthDescriptions[*].[Target.Id,TargetHealth.State,TargetHealth.Description]' \
-          --output table
-    
-        echo "Waiting for all targets to be healthy..."
-        TIMEOUT=300
-        ELAPSED=0
-        INTERVAL=30
-        
-        while [ $ELAPSED -lt $TIMEOUT ]; do
-          UNHEALTHY_COUNT=$(aws elbv2 describe-target-health \
-            --target-group-arn $TARGET_GROUP_ARN \
-            --region ${{ env.AWS_REGION }} \
-            --query 'length(TargetHealthDescriptions[?TargetHealth.State!=`healthy`])' \
-            --output text)
-          
-          if [ "$UNHEALTHY_COUNT" = "0" ]; then
-            echo "All targets are healthy!"
-            break
-          fi
-          
-          echo "Still have $UNHEALTHY_COUNT unhealthy targets, waiting..."
-          sleep $INTERVAL
-          ELAPSED=$((ELAPSED + INTERVAL))
-        done
-        
-        if [ $ELAPSED -ge $TIMEOUT ]; then
-          echo "Warning: Timeout waiting for all targets to be healthy"
-        fi
-
-    - name: Wait for application to be accessible
-      run: |
-        APP_URL="${{ steps.get-outputs.outputs.app-url }}"
-        echo "Waiting for application to be accessible at: $APP_URL"
-        
-        # Function to check application health
-        check_app_health() {
-          local response=$(curl -s -w "%{http_code}" "$APP_URL" 2>/dev/null | tail -n1)
-          if [ "$response" = "200" ]; then
-            local content=$(curl -s "$APP_URL" 2>/dev/null)
-            if echo "$content" | grep -q "Simple PHP Application"; then
-              return 0
-            fi
-          fi
-          return 1
-        }
-        
-        # Wait up to 5 minutes for the application
-        TIMEOUT=300
-        ELAPSED=0
-        INTERVAL=15
-        
-         while [ $ELAPSED -lt $TIMEOUT ]; do
-          if check_app_health; then
-            echo "Application is accessible and responding correctly"
-            break
-          fi
-          sleep $INTERVAL
-          ELAPSED=$((ELAPSED + INTERVAL))
-        done
-
-    - name: Download latest ChromeDriver
-      run: |
-        wget "https://storage.googleapis.com/chrome-for-testing-public/138.0.7153.0/linux64/chromedriver-linux64.zip"
-        unzip chromedriver-linux64.zip
-        chmod +x chromedriver-linux64/chromedriver
-        sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
-    
-    - name: Run post-deployment integration tests
+    - name: Verify deployment and run integration tests
       env:
-        APP_URL: ${{ steps.get-outputs.outputs.app-url }}
-        DB_HOST: ${{ steps.get-outputs.outputs.database-endpoint }}
+        APP_URL: ${{ steps.outputs.outputs.app-url }}
+        DB_HOST: ${{ steps.outputs.outputs.database-endpoint }}
         DB_PORT: 3306
         DB_NAME: testdb
         DB_USERNAME: ${{ secrets.DB_USERNAME }}
         DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
         DISPLAY: :99
       run: |
-        echo "Running integration tests against deployed application..."
-        echo "Target URL: $APP_URL"
-        Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
-        sleep 3
-
+        echo "Waiting for application at: $APP_URL"
+        timeout 120 bash -c 'until curl -s "$APP_URL" | grep -q "Simple PHP Application"; do sleep 10; done'
+        
+        # Set up test environment
         pip install -r tests/requirements.txt
-
-        python -m pytest tests/ -v --tb=short --maxfail=3 --junitxml=test-results.xml
+        wget -q "https://storage.googleapis.com/chrome-for-testing-public/138.0.7153.0/linux64/chromedriver-linux64.zip"
+        unzip -q chromedriver-linux64.zip
+        sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+        
+        Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+        sleep 2
+        
+        python -m pytest tests/ -v --tb=short --maxfail=3
 
     - name: Deployment summary
       if: always()
       run: |
         echo "=== DEPLOYMENT SUMMARY ==="
-        echo "Stack Name: ${{ env.STACK_NAME }}"
+        echo "Stack: ${{ env.STACK_NAME }}"
         echo "Region: ${{ env.AWS_REGION }}"
-        echo "Image Tag: ${{ env.DOCKER_IMAGE_TAG }}"
-        if [ "${{ steps.deploy-stack.outputs.no-changes }}" = "true" ]; then
-          echo "Status: No changes deployed (stack was already up to date)"
-        elif [ "${{ job.status }}" = "success" ]; then
-          echo "Deployment completed successfully"
-          echo "Application URL: ${{ steps.get-outputs.outputs.app-url }}"
-          echo "Load Balancer DNS: ${{ steps.get-outputs.outputs.load-balancer-dns }}"
-        else
-          echo "Deployment failed"
-          aws cloudformation describe-stack-events \
-            --stack-name ${{ env.STACK_NAME }} \
-            --region ${{ env.AWS_REGION }} \
-            --max-items 5 \
-            --query 'StackEvents[*].[Timestamp,ResourceStatus,ResourceType,LogicalResourceId,ResourceStatusReason]' \
-            --output table 2>/dev/null || echo "Could not retrieve stack events"
+        echo "Image: ${{ env.DOCKER_IMAGE_TAG }}"
+        echo "Status: ${{ job.status }}"
+        if [ "${{ job.status }}" = "success" ]; then
+          echo "App URL: ${{ steps.outputs.outputs.app-url }}"
         fi
         echo "=========================="

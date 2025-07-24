@@ -29,7 +29,7 @@ header('Content-Type: text/html; charset=utf-8');
             $dbConfig = new DatabaseConfig();
             $pdo = $dbConfig->getConnection();
             
-            echo '<div class="status success">✓ Database connection successful!</div>';
+            echo '<div class="status success"> Database connection successful!</div>';
             
             // Create test table if it doesn't exist
             $createTable = "CREATE TABLE IF NOT EXISTS test (
@@ -49,7 +49,8 @@ header('Content-Type: text/html; charset=utf-8');
                     ['Sample Item 1', 'This is a test value 1'],
                     ['Sample Item 2', 'This is a test value 2'],
                     ['Sample Item 3', 'This is a test value 3'],
-                    ['Sample Item 4', 'This is a test value 4']
+                    ['Sample Item 4', 'This is a test value 4'],
+                    ['Sample Item 5', 'This is a test value 5']
                 ];
                 
                 $insertStmt = $pdo->prepare("INSERT INTO test (name, value) VALUES (?, ?)");
