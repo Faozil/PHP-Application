@@ -302,7 +302,7 @@ jobs:
           aws autoscaling terminate-instance-in-auto-scaling-group \
             --instance-id $INSTANCE_ID \
             --region ${{ env.AWS_REGION }} \
-            --should-decrement-desired-capacity true
+            --should-decrement-desired-capacity
         done
         
         # Wait a moment for terminations to process
