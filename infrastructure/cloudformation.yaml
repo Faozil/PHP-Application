@@ -239,8 +239,8 @@ Resources:
     Properties:
       LaunchTemplateName: php-app-launch-template
       LaunchTemplateData:
-        ImageId: ami-0c02fb55956c7d316  
-        InstanceType: t2.micro
+        ImageId: ami-00fefe800bd08f8da  
+        InstanceType: t3.micro
         KeyName: !Ref KeyPairName
         SecurityGroupIds:
           - !Ref WebSecurityGroup
