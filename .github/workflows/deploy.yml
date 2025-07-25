@@ -185,10 +185,6 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment: production
-    outputs:
-      app-url: ${{ steps.get-outputs.outputs.app-url }}
-      load-balancer-dns: ${{ steps.get-outputs.outputs.load-balancer-dns }}
-      database-endpoint: ${{ steps.get-outputs.outputs.database-endpoint }}
 
     steps:
       - name: Checkout code
@@ -491,7 +487,6 @@ jobs:
             echo "Status: Successfully deployed"
             echo "Application URL: ${{ steps.get-outputs.outputs.app-url }}"
             echo "Load Balancer DNS: ${{ steps.get-outputs.outputs.load-balancer-dns }}"
-            echo "Database Endpoint: ${{ steps.get-outputs.outputs.database-endpoint }}"
           else
             echo "Status: Deployment failed"
             echo "Recent stack events:"
