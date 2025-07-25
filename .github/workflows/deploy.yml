@@ -261,7 +261,7 @@ jobs:
       - name: Validate CloudFormation template
         run: |
           aws cloudformation validate-template \
-            --template-file infrastructure/cloudformation.yaml \
+            --template-body file://infrastructure/cloudformation.yaml \
             --region ${{ env.AWS_REGION }}
 
       - name: Deploy CloudFormation stack
