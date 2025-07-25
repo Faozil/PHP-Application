@@ -121,9 +121,9 @@ jobs:
           pip install -r tests/requirements.txt
           wget -qO chromedriver.zip \
             "https://storage.googleapis.com/chrome-for-testing-public/138.0.7153.0/linux64/chromedriver-linux64.zip"
-          unzip chromedriver.zip
-          chmod +x chromedriver
-          sudo mv chromedriver /usr/local/bin/
+          unzip chromedriver-linux64.zip
+          chmod +x chromedriver-linux64/chromedriver
+          sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
 
       - name: Run test suite
         env:
@@ -452,9 +452,10 @@ jobs:
         run: |
           wget -qO chromedriver.zip \
             "https://storage.googleapis.com/chrome-for-testing-public/138.0.7153.0/linux64/chromedriver-linux64.zip"
-          unzip chromedriver.zip
-          chmod +x chromedriver
-          sudo mv chromedriver /usr/local/bin/
+          unzip chromedriver-linux64.zip
+          chmod +x chromedriver-linux64/chromedriver
+          sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+
 
       - name: Run post-deployment integration tests
         env:
