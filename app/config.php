@@ -55,14 +55,14 @@ function handleApiRequest() {
             $pdo = $dbConfig->getConnection();
             
             // Test database connection with a simple query
-            $stmt = $pdo->query("SELECT 1 as test, NOW() as current_time");
+            $stmt = $pdo->query("SELECT 1 as test, NOW() as server_time");
             $result = $stmt->fetch(PDO::FETCH_ASSOC);
             
             http_response_code(200);
             echo json_encode([
                 'status' => 'success',
                 'message' => 'Database connection successful',
-                'database_time' => $result['current_time'],
+                'database_time' => $result['server_time'], // Updated to match new alias
                 'connection_test' => $result['test'] == 1 ? 'passed' : 'failed',
                 'host' => getenv('DB_HOST') ?: 'localhost',
                 'database' => getenv('DB_NAME') ?: 'testdb',
@@ -79,7 +79,7 @@ function handleApiRequest() {
         }
         exit;
     }
-    
+        
     // Database status endpoint with more details
     if ($path === '/api/db-status' && $method === 'GET') {
         try {
@@ -139,7 +139,6 @@ function handleApiRequest() {
             'GET /api/health' => 'Application health check',
             'GET /api/db-test' => 'Database connection test',
             'GET /api/db-status' => 'Detailed database status',
-            'POST /api/create-test-data' => 'Create sample test data'
         ],
         'timestamp' => date('Y-m-d H:i:s')
     ]);
