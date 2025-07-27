@@ -84,7 +84,7 @@ if (isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], '/api/') =
 </head>
 <body>
     <div class="container">
-        <h1>🚀 Simple PHP Application</h1>
+        <h1> Simple PHP Application</h1>
         
         <?php
         $dbConnected = false;
@@ -98,7 +98,7 @@ if (isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], '/api/') =
             $pdo = $dbConfig->getConnection();
             $dbConnected = true;
             
-            echo '<div class="status success">✅ Database connection successful!</div>';
+            echo '<div class="status success"> Database connection successful!</div>';
             
             // Get database version
             try {
@@ -187,7 +187,7 @@ if (isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], '/api/') =
 
         <!-- Environment Information -->
         <div class="env-info">
-            <h3>🔧 Environment Information</h3>
+            <h3> Environment Information</h3>
             <div class="stats-grid">
                 <div>
                     <strong>PHP Version:</strong><br>
