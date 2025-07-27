@@ -3,11 +3,10 @@ name: Deploy PHP Application
 on:
   push:
     branches: [main]
-  paths-ignore:
-    - 'README.md'
-    - 'monitoring/**'
-    - 'screenshots/**'
-    - '.github/workflows/deploy.yml'
+    paths-ignore:
+      - 'README.md'
+      - 'monitoring/**'
+      - 'screenshots/**'
 
 env:
   AWS_REGION: eu-west-2

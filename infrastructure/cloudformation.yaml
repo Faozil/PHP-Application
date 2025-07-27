@@ -255,6 +255,26 @@ Resources:
               - logs:CreateLogGroup
               - logs:CreateLogStream
               - logs:PutLogEvents
+              - logs:DescribeLogGroups
+              - logs:DescribeLogStreams
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - cloudwatch:PutMetricData
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - ec2:DescribeInstances
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - autoscaling:DescribeAutoScalingGroups
+              - autoscaling:DescribeAutoScalingInstances
+              - autoscaling:DescribePolicies
+              - autoscaling:DescribeScalingActivities
+              - autoscaling:SetInstanceHealth
+              - autoscaling:CompleteLifecycleAction
+              - autoscaling:RecordLifecycleActionHeartbeat
             Resource: '*'
       Roles:
         - !Ref EC2Role
@@ -358,23 +378,205 @@ Resources:
               echo "Placeholder page served via Apache"
             fi
             
-            # Setup CloudWatch monitoring
-            cat << 'EOF' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+            # Create PHP metrics collection script for Docker container
+            cat << 'METRICSEOF' > /usr/local/bin/php-metrics-collector.sh
+            #!/bin/bash
+            
+            # PHP Metrics Collection Script for Dockerized Application
+            # This script collects metrics from your containerized PHP application
+            
+            AWS_REGION="${AWS::Region}"
+            NAMESPACE="PHP/Application"
+            INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+            
+            # Function to send metric to CloudWatch
+            send_metric() {
+                local metric_name=$1
+                local value=$2
+                local unit=$3
+                local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")
+                
+                aws cloudwatch put-metric-data \
+                    --region $AWS_REGION \
+                    --namespace $NAMESPACE \
+                    --metric-data MetricName=$metric_name,Value=$value,Unit=$unit,Timestamp=$timestamp
+            }
+            
+            # Function to check if container is running
+            is_container_running() {
+                docker ps --format "table {{.Names}}" | grep -q "php-app"
+            }
+            
+            # Function to get container metrics
+            get_container_metrics() {
+                if is_container_running; then
+                    # Get container stats
+                    local container_stats=$(docker stats php-app --no-stream --format "table {{.CPUPerc}},{{.MemUsage}}" | tail -n +2)
+                    echo "$container_stats"
+                else
+                    echo "0.00%,0B / 0B"
+                fi
+            }
+            
+            # Function to collect metrics from application logs in container
+            collect_app_metrics() {
+                if is_container_running; then
+                    # Get logs from the last minute and parse metrics
+                    local logs=$(docker logs php-app --since=1m 2>&1 | grep "PHP_METRIC" || echo "")
+                    
+                    if [ ! -z "$logs" ]; then
+                        # Count requests
+                        local request_count=$(echo "$logs" | grep -c "request_count:1" || echo "0")
+                        
+                        # Count errors  
+                        local error_count=$(echo "$logs" | grep -c "error_count:1" || echo "0")
+                        
+                        # Get average response time
+                        local response_times=$(echo "$logs" | grep "response_time:" | sed 's/.*response_time://' | head -10)
+                        local avg_response_time=0
+                        if [ ! -z "$response_times" ]; then
+                            avg_response_time=$(echo "$response_times" | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print 0}')
+                        fi
+                        
+                        # Get latest memory usage
+                        local memory_usage=$(echo "$logs" | grep "memory_usage:" | tail -1 | sed 's/.*memory_usage://' || echo "0")
+                        
+                        # Send metrics to CloudWatch
+                        if [ "$request_count" -gt 0 ]; then
+                            send_metric "php_requests_total" "$request_count" "Count"
+                        fi
+                        
+                        if [ "$error_count" -gt 0 ]; then
+                            send_metric "php_errors_total" "$error_count" "Count"
+                        fi
+                        
+                        if [ "$(echo "$avg_response_time > 0" | bc -l 2>/dev/null || echo "0")" = "1" ]; then
+                            send_metric "php_response_time" "$avg_response_time" "Milliseconds"
+                        fi
+                        
+                        if [ "$memory_usage" -gt 0 ]; then
+                            send_metric "php_memory_usage" "$memory_usage" "Bytes"
+                        fi
+                    fi
+                    
+                    # Try to get metrics via HTTP API if your app exposes them
+                    local api_response=$(curl -s http://localhost/api/health 2>/dev/null || echo '{}')
+                    local api_metrics=$(curl -s http://localhost/api/metrics 2>/dev/null || echo '{}')
+                    
+                    # Parse JSON response for additional metrics (if available)
+                    if command -v jq >/dev/null 2>&1; then
+                        local memory_from_api=$(echo "$api_metrics" | jq -r '.memory_usage // 0' 2>/dev/null || echo "0")
+                        if [ "$memory_from_api" -gt 0 ]; then
+                            send_metric "php_memory_usage" "$memory_from_api" "Bytes"
+                        fi
+                    fi
+                fi
+            }
+            
+            # Function to get process count (Docker container processes)
+            get_php_processes() {
+                if is_container_running; then
+                    # Count processes inside the container
+                    docker exec php-app ps aux 2>/dev/null | grep -c "[p]hp\|[a]pache\|[n]ginx" || echo "1"
+                else
+                    echo "0"
+                fi
+            }
+            
+            # Function to check application health
+            check_app_health() {
+                local health_status=0
+                if is_container_running; then
+                    # Check if application responds
+                    if curl -s -o /dev/null -w "%{http_code}" http://localhost/ | grep -q "200"; then
+                        health_status=1
+                    fi
+                fi
+                send_metric "php_app_healthy" "$health_status" "Count"
+            }
+            
+            # Main execution loop
+            while true; do
+                if is_container_running; then
+                    echo "Collecting metrics from running container..."
+                    
+                    # Get PHP active processes
+                    php_processes=$(get_php_processes)
+                    send_metric "php_active_processes" "$php_processes" "Count"
+                    
+                    # Collect application-specific metrics
+                    collect_app_metrics
+                    
+                    # Check application health
+                    check_app_health
+                    
+                    # Get container resource usage
+                    container_stats=$(get_container_metrics)
+                    echo "Container stats: $container_stats"
+                    
+                else
+                    echo "Container not running, sending zero metrics..."
+                    # Send zero metrics when container is not running
+                    send_metric "php_active_processes" "0" "Count"
+                    send_metric "php_app_healthy" "0" "Count"
+                fi
+                
+                sleep 60
+            done
+            METRICSEOF
+            
+            chmod +x /usr/local/bin/php-metrics-collector.sh
+            
+            # Create systemd service for metrics collection
+            cat << 'SERVICEEOF' > /etc/systemd/system/php-metrics.service
+            [Unit]
+            Description=PHP Metrics Collector for Dockerized Application
+            After=network.target docker.service
+            Requires=docker.service
+            
+            [Service]
+            Type=simple
+            User=root
+            ExecStart=/usr/local/bin/php-metrics-collector.sh
+            Restart=always
+            RestartSec=30
+            
+            [Install]
+            WantedBy=multi-user.target
+            SERVICEEOF
+            
+            # Enable and start the metrics service
+            systemctl daemon-reload
+            systemctl enable php-metrics.service
+            systemctl start php-metrics.service
+            
+            # Setup CloudWatch monitoring configuration
+            cat << 'CWEOF' > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
             {
               "metrics": {
                 "namespace": "AWS/EC2/Custom",
                 "metrics_collected": {
                   "cpu": {
                     "measurement": ["cpu_usage_idle", "cpu_usage_iowait", "cpu_usage_user", "cpu_usage_system"],
-                    "metrics_collection_interval": 60
+                    "metrics_collection_interval": 60,
+                    "totalcpu": false
                   },
                   "disk": {
-                    "measurement": ["used_percent"],
+                    "measurement": ["used_percent", "inodes_free"],
+                    "metrics_collection_interval": 60,
+                    "resources": ["*"]
+                  },
+                  "diskio": {
+                    "measurement": ["io_time"],
                     "metrics_collection_interval": 60,
                     "resources": ["*"]
                   },
                   "mem": {
                     "measurement": ["mem_used_percent"],
+                    "metrics_collection_interval": 60
+                  },
+                  "docker": {
+                    "measurement": ["docker_container_cpu", "docker_container_mem"],
                     "metrics_collection_interval": 60
                   }
                 }
@@ -385,7 +587,7 @@ Resources:
                     "collect_list": [
                       {
                         "file_path": "/var/log/messages",
-                        "log_group_name": "/aws/ec2/php-app",
+                        "log_group_name": "/aws/ec2/php-app/system",
                         "log_stream_name": "{instance_id}/messages"
                       }
                     ]
@@ -393,10 +595,10 @@ Resources:
                 }
               }
             }
-            EOF
+            CWEOF
             
             /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
-
+            
   AutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:

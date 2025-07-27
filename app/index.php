@@ -1,6 +1,8 @@
 <?php
 require_once 'config.php';
 
+$request_start_time = microtime(true);
+
 // Set default content type
 header('Content-Type: text/html; charset=utf-8');
 
@@ -228,3 +230,18 @@ if (isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], '/api/') =
     </div>
 </body>
 </html>
+
+<?php
+$response_time = (microtime(true) - $request_start_time) * 1000; // milliseconds
+$memory_used = memory_get_usage();
+
+// Log metrics for CloudWatch collection
+error_log("PHP_METRIC response_time:" . $response_time);
+error_log("PHP_METRIC memory_usage:" . $memory_used);
+error_log("PHP_METRIC request_count:1");
+
+// Log errors when they occur
+if (isset($dbError) && !empty($dbError)) {
+    error_log("PHP_METRIC error_count:1");
+}
+?>
