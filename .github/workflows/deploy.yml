@@ -3,6 +3,11 @@ name: Deploy PHP Application
 on:
   push:
     branches: [main]
+  excludes:
+    - 'README.md'
+    - 'monitoring/**'
+    - 'screenshots/**'
+    - '.github/workflows/deploy.yml'
 
 env:
   AWS_REGION: eu-west-2
