@@ -256,9 +256,9 @@ The application includes a pre-configured Grafana dashboard for monitoring:
 - **Application Response Times**
 - **Error Rates**
 
-![Grafana Dashboard Screenshot](screenshots/grafana-dashboard-1.png)
+![Grafana Dashboard Screenshot](screenshots/Grafana-dashboard-1.png)
 
-![Grafana Dashboard Screenshot](screenshots/grafana-dashboard-2.png)
+![Grafana Dashboard Screenshot](screenshots/Grafana-dashboard-2.png)
 
 ### CloudWatch Metrics
 
