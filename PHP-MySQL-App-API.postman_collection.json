@@ -1,0 +1,463 @@
+{
+  "info": {
+    "name": "PHP MySQL App API",
+    "description": "Collection for testing PHP MySQL Application API endpoints",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://php-app-alb-35956004.eu-west-2.elb.amazonaws.com/",
+      "description": "Base URL for the application (change this to your deployed URL)"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test(\"Response has status field\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('status');",
+              "    pm.expect(jsonData.status).to.eql('success');",
+              "});",
+              "",
+              "pm.test(\"Response has required fields\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('message');",
+              "    pm.expect(jsonData).to.have.property('timestamp');",
+              "    pm.expect(jsonData).to.have.property('php_version');",
+              "    pm.expect(jsonData).to.have.property('environment');",
+              "});",
+              "",
+              "pm.test(\"Response time is less than 5000ms\", function () {",
+              "    pm.expect(pm.response.responseTime).to.be.below(5000);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/health",
+          "host": ["{{base_url}}"],
+          "path": ["api", "health"]
+        },
+        "description": "Check if the application is running and healthy"
+      },
+      "response": [
+        {
+          "name": "Success Response",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/health",
+              "host": ["{{base_url}}"],
+              "path": ["api", "health"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n    \"status\": \"success\",\n    \"message\": \"Application is running\",\n    \"timestamp\": \"2025-01-15 10:30:00\",\n    \"php_version\": \"8.2.0\",\n    \"server_time\": \"2025-01-15 10:30:00\",\n    \"environment\": \"production\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Database Connection Test",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200 or 500\", function () {",
+              "    pm.expect([200, 500]).to.include(pm.response.code);",
+              "});",
+              "",
+              "pm.test(\"Response has status field\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('status');",
+              "    pm.expect(['success', 'error']).to.include(jsonData.status);",
+              "});",
+              "",
+              "pm.test(\"Success response has required fields\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    if (jsonData.status === 'success') {",
+              "        pm.expect(jsonData).to.have.property('message');",
+              "        pm.expect(jsonData).to.have.property('database_time');",
+              "        pm.expect(jsonData).to.have.property('connection_test');",
+              "        pm.expect(jsonData.connection_test).to.eql('passed');",
+              "    }",
+              "});",
+              "",
+              "pm.test(\"Error response has error field\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    if (jsonData.status === 'error') {",
+              "        pm.expect(jsonData).to.have.property('error');",
+              "    }",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/db-test",
+          "host": ["{{base_url}}"],
+          "path": ["api", "db-test"]
+        },
+        "description": "Test database connectivity and perform a simple query"
+      },
+      "response": [
+        {
+          "name": "Success Response",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/db-test",
+              "host": ["{{base_url}}"],
+              "path": ["api", "db-test"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n    \"status\": \"success\",\n    \"message\": \"Database connection successful\",\n    \"database_time\": \"2025-01-15 10:30:00\",\n    \"connection_test\": \"passed\",\n    \"host\": \"mysql-host\",\n    \"database\": \"testdb\",\n    \"timestamp\": \"2025-01-15 10:30:00\"\n}"
+        },
+        {
+          "name": "Error Response",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/db-test",
+              "host": ["{{base_url}}"],
+              "path": ["api", "db-test"]
+            }
+          },
+          "status": "Internal Server Error",
+          "code": 500,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n    \"status\": \"error\",\n    \"message\": \"Database connection failed\",\n    \"error\": \"Connection refused\",\n    \"timestamp\": \"2025-01-15 10:30:00\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Database Status",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200 or 500\", function () {",
+              "    pm.expect([200, 500]).to.include(pm.response.code);",
+              "});",
+              "",
+              "pm.test(\"Response has status field\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('status');",
+              "});",
+              "",
+              "pm.test(\"Success response has database info\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    if (jsonData.status === 'success') {",
+              "        pm.expect(jsonData).to.have.property('database_version');",
+              "        pm.expect(jsonData).to.have.property('test_table_exists');",
+              "        pm.expect(jsonData).to.have.property('connection_details');",
+              "    }",
+              "});",
+              "",
+              "pm.test(\"Connection details are present\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    if (jsonData.status === 'success') {",
+              "        pm.expect(jsonData.connection_details).to.have.property('host');",
+              "        pm.expect(jsonData.connection_details).to.have.property('database');",
+              "        pm.expect(jsonData.connection_details).to.have.property('port');",
+              "    }",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/db-status",
+          "host": ["{{base_url}}"],
+          "path": ["api", "db-status"]
+        },
+        "description": "Get detailed database status including version and table information"
+      },
+      "response": [
+        {
+          "name": "Success Response",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/db-status",
+              "host": ["{{base_url}}"],
+              "path": ["api", "db-status"]
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n    \"status\": \"success\",\n    \"message\": \"Database status retrieved successfully\",\n    \"database_version\": \"8.0.35\",\n    \"test_table_exists\": true,\n    \"test_table_records\": 5,\n    \"connection_details\": {\n        \"host\": \"mysql-host\",\n        \"database\": \"testdb\",\n        \"port\": \"3306\"\n    },\n    \"timestamp\": \"2025-01-15 10:30:00\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Create Test Data",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 201 or 500\", function () {",
+              "    pm.expect([201, 500]).to.include(pm.response.code);",
+              "});",
+              "",
+              "pm.test(\"Response has status field\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('status');",
+              "});",
+              "",
+              "pm.test(\"Success response shows records inserted\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    if (jsonData.status === 'success') {",
+              "        pm.expect(jsonData).to.have.property('records_inserted');",
+              "        pm.expect(jsonData.records_inserted).to.be.a('number');",
+              "        pm.expect(jsonData.records_inserted).to.be.above(0);",
+              "    }",
+              "});",
+              "",
+              "pm.test(\"Response has timestamp\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('timestamp');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/api/create-test-data",
+          "host": ["{{base_url}}"],
+          "path": ["api", "create-test-data"]
+        },
+        "description": "Create sample test data in the database"
+      },
+      "response": [
+        {
+          "name": "Success Response",
+          "originalRequest": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/create-test-data",
+              "host": ["{{base_url}}"],
+              "path": ["api", "create-test-data"]
+            }
+          },
+          "status": "Created",
+          "code": 201,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n    \"status\": \"success\",\n    \"message\": \"Test data created successfully\",\n    \"records_inserted\": 3,\n    \"timestamp\": \"2025-01-15 10:30:00\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "Invalid Endpoint Test",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 404\", function () {",
+              "    pm.response.to.have.status(404);",
+              "});",
+              "",
+              "pm.test(\"Response indicates error\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData.status).to.eql('error');",
+              "    pm.expect(jsonData.message).to.include('not found');",
+              "});",
+              "",
+              "pm.test(\"Response lists available endpoints\", function () {",
+              "    const jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.have.property('available_endpoints');",
+              "    pm.expect(Object.keys(jsonData.available_endpoints).length).to.be.above(0);",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/invalid-endpoint",
+          "host": ["{{base_url}}"],
+          "path": ["api", "invalid-endpoint"]
+        },
+        "description": "Test how the API handles invalid endpoints"
+      },
+      "response": [
+        {
+          "name": "404 Response",
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/invalid-endpoint",
+              "host": ["{{base_url}}"],
+              "path": ["api", "invalid-endpoint"]
+            }
+          },
+          "status": "Not Found",
+          "code": 404,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "cookie": [],
+          "body": "{\n    \"status\": \"error\",\n    \"message\": \"API endpoint not found\",\n    \"requested_path\": \"/api/invalid-endpoint\",\n    \"method\": \"GET\",\n    \"available_endpoints\": {\n        \"GET /api/health\": \"Application health check\",\n        \"GET /api/db-test\": \"Database connection test\",\n        \"GET /api/db-status\": \"Detailed database status\",\n        \"POST /api/create-test-data\": \"Create sample test data\"\n    },\n    \"timestamp\": \"2025-01-15 10:30:00\"\n}"
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Set timestamp for requests",
+          "pm.globals.set('timestamp', new Date().toISOString());"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Global test to ensure JSON response",
+          "pm.test('Response is JSON', function() {",
+          "    pm.response.to.be.json;",
+          "});",
+          "",
+          "// Global test for response time",
+          "pm.test('Response time is reasonable', function() {",
+          "    pm.expect(pm.response.responseTime).to.be.below(10000);",
+          "});"
+        ]
+      }
+    }
+  ]
+}

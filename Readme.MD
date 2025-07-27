@@ -73,6 +73,12 @@ The application follows a modern cloud-native architecture:
 
 The application provides RESTful API endpoints for monitoring and testing:
 
+Testing with Postman:
+
+- Import the Postman collection [PHP-MySQL-App-API.postman_collection.json]
+- Run the collection to test all endpoints
+- Each request includes automated tests for validation
+
 ### Health Check
 **GET** `/api/health`
 
@@ -251,7 +257,9 @@ The application includes a pre-configured Grafana dashboard for monitoring:
 - **Application Response Times**
 - **Error Rates**
 
-![Grafana Dashboard Screenshot](screenshots/grafana-dashboard.png)
+![Grafana Dashboard Screenshot](screenshots/grafana-dashboard-1.png)
+
+![Grafana Dashboard Screenshot](screenshots/grafana-dashboard-2.png)
 
 ### CloudWatch Metrics
 
