@@ -217,10 +217,9 @@ The pipeline is defined in `.github/workflows/deploy.yaml` with the following ke
 
 - **Parallel Testing**: Multiple test types run concurrently
 - **Environment Isolation**: Separate test and production environments
-- **Rollback Capability**: Failed deployments trigger automatic rollback
 - **Health Monitoring**: Continuous health checks during deployment
 
-## 🧪 Testing
+## Testing
 
 ### Test Suite Structure
 
@@ -245,7 +244,7 @@ tests/
 
 ![Test Results Screenshot](screenshots/test-result.png)
 
-## 📊 Monitoring
+## Monitoring
 
 ### Grafana Dashboard
 
