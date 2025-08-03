@@ -79,6 +79,7 @@ jobs:
             -e DB_PORT=3306 \
             -e APP_ENV=testing \
             php-app:${{ env.DOCKER_IMAGE_TAG }}
+            
 
       - name: Verify container status and connectivity
         run: |
